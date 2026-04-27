@@ -224,10 +224,10 @@ test-one: $(BIN)
 # rather than whether they're expected to fail.
 test-all: $(BIN)
 	@pass=0; fail=0; \
-	for f in $(TEST_DIR)/*.sysml $(TEST_DIR)/bad/*.sysml; do \
+	for f in $(TEST_DIR)/*.sysml $(TEST_DIR)/negative/*.sysml; do \
 	    [ -e "$$f" ] || continue; \
 	    case $$f in \
-	        $(TEST_DIR)/bad/*) expect=fail; label=$${f#$(TEST_DIR)/} ;; \
+	        $(TEST_DIR)/negative/*) expect=fail; label=$${f#$(TEST_DIR)/} ;; \
 	        *)                 expect=pass; label=$${f#$(TEST_DIR)/} ;; \
 	    esac; \
 	    out=$$(./$(BIN) "$$f" 2>&1); rc=$$?; \
