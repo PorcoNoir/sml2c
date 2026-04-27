@@ -24,13 +24,36 @@ typedef enum {
     NODE_PROGRAM,         /* top-level container, never written by user */
     NODE_PACKAGE,         /* package Foo { ... }                         */
     NODE_IMPORT,          /* import A::B::C; or import A::B::*;          */
-    NODE_PART_DEF,        /* part def Name { ... }                       */
-    NODE_PART_USAGE,      /* part p : Type;  or  part p : Type { ... }   */
+    NODE_DEFINITION,      /* part/port/interface/item/connection/flow def Name { ... } */
+    NODE_USAGE,           /* part/port/interface/item/connection/flow name : Type [...] */
     NODE_ATTRIBUTE,       /* attribute name : Type;                      */
     NODE_QUALIFIED_NAME,  /* A::B::C  (used as a type ref or import tgt) */
     NODE_MULTIPLICITY,    /* [n], [lo..hi], [*], [lo..*]                 */
     NODE_DOC              /* doc keyword form, or slash-star-star form */
 } NodeKind;
+
+/* Which family a definition or usage belongs to.  All six kinds share
+ * the same surface grammar (`<keyword> def Name {…}` and `<keyword> name
+ * : Type;`) so we tag them with a DefKind rather than minting distinct
+ * NodeKind values for each.                                             */
+typedef enum {
+    DEF_PART = 0,
+    DEF_PORT,
+    DEF_INTERFACE,
+    DEF_ITEM,
+    DEF_CONNECTION,
+    DEF_FLOW
+} DefKind;
+
+/* Port direction modifier.  Currently only port usages can carry one,
+ * but we put it on the usage variant uniformly so the parser doesn't
+ * need a separate field for it.                                        */
+typedef enum {
+    DIR_NONE = 0,
+    DIR_IN,
+    DIR_OUT,
+    DIR_INOUT
+} Direction;
 
 /* Visibility modifier on a declaration.  VIS_DEFAULT means no modifier
  * appeared in source — SysML treats that as effectively `public` at
@@ -49,21 +72,27 @@ struct Node {
     NodeKind kind;
     int      line;
     union {
-        /* PROGRAM, PACKAGE, PART_DEF — all "named scopes" with members. */
+        /* PROGRAM, PACKAGE, DEFINITION — all "named scopes" with members.
+         * defKind is meaningful only for DEFINITION; the other two leave
+         * it at zero (DEF_PART), which is harmless because they're never
+         * dispatched through the kind-aware printer.                    */
         struct {
             Token      name;        /* unused for PROGRAM                */
             Visibility visibility;
+            DefKind    defKind;
             Node**     members;
             int        memberCount;
             int        memberCapacity;
-            Node*      specializes; /* `:>`  / `specializes` (PART_DEF)  */
-            Node*      redefines;   /* `:>>` / `redefines`   (PART_DEF)  */
+            Node*      specializes; /* `:>`  / `specializes` (DEFINITION) */
+            Node*      redefines;   /* `:>>` / `redefines`   (DEFINITION) */
         } scope;
 
-        /* PART_USAGE — has an optional type and an optional body.       */
+        /* USAGE — has an optional type and an optional body.            */
         struct {
             Token      name;
             Visibility visibility;
+            DefKind    defKind;
+            Direction  direction;   /* in/out/inout (port usages mostly) */
             Node*      type;        /* `:`   NULL if no `: Type`         */
             Node*      specializes; /* `:>`  / `specializes`             */
             Node*      redefines;   /* `:>>` / `redefines`               */

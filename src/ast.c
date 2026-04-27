@@ -56,11 +56,11 @@ void astSetVisibility(Node* n, Visibility v) {
     if (!n || v == VIS_DEFAULT) return;
     switch (n->kind) {
     case NODE_PACKAGE:
-    case NODE_PART_DEF:    n->as.scope.visibility     = v; break;
-    case NODE_PART_USAGE:  n->as.usage.visibility     = v; break;
+    case NODE_DEFINITION:  n->as.scope.visibility     = v; break;
+    case NODE_USAGE:       n->as.usage.visibility     = v; break;
     case NODE_ATTRIBUTE:   n->as.attribute.visibility = v; break;
     case NODE_IMPORT:      n->as.import.visibility    = v; break;
-    default: break;        /* PROGRAM, QUALIFIED_NAME, MULTIPLICITY have none */
+    default: break;        /* PROGRAM, QUALIFIED_NAME, MULTIPLICITY, DOC: none */
     }
 }
 
@@ -103,6 +103,32 @@ static void emitVisibility(Visibility v) {
     }
 }
 
+static void emitDirection(Direction d) {
+    switch (d) {
+    case DIR_IN:    printf("in ");    break;
+    case DIR_OUT:   printf("out ");   break;
+    case DIR_INOUT: printf("inout "); break;
+    case DIR_NONE:  /* nothing */     break;
+    }
+}
+
+/* Map a DefKind to the human-readable label used in the AST dump.
+ * The two arrays preserve the older "PartDef" / "Part" output that
+ * existing test files compare against.                             */
+static const char* kindLabel(DefKind k, bool isDefinition) {
+    static const char* defs[] = {
+        "PartDef", "PortDef", "InterfaceDef",
+        "ItemDef", "ConnectionDef", "FlowDef"
+    };
+    static const char* uses[] = {
+        "Part", "Port", "Interface",
+        "Item", "Connection", "Flow"
+    };
+    int idx = (int)k;
+    if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
+    return isDefinition ? defs[idx] : uses[idx];
+}
+
 static void printNode(const Node* n, int depth) {
     if (!n) { emitIndent(depth); printf("(null)\n"); return; }
     emitIndent(depth);
@@ -121,9 +147,11 @@ static void printNode(const Node* n, int depth) {
             printNode(n->as.scope.members[i], depth + 1);
         break;
 
-    case NODE_PART_DEF:
+    case NODE_DEFINITION:
         emitVisibility(n->as.scope.visibility);
-        printf("PartDef '"); emitToken(n->as.scope.name); printf("'");
+        printf("%s '", kindLabel(n->as.scope.defKind, true));
+        emitToken(n->as.scope.name);
+        printf("'");
         if (n->as.scope.specializes) {
             printf(" :> ");
             emitQualifiedName(n->as.scope.specializes);
@@ -137,9 +165,12 @@ static void printNode(const Node* n, int depth) {
             printNode(n->as.scope.members[i], depth + 1);
         break;
 
-    case NODE_PART_USAGE:
+    case NODE_USAGE:
         emitVisibility(n->as.usage.visibility);
-        printf("Part '"); emitToken(n->as.usage.name); printf("'");
+        emitDirection(n->as.usage.direction);
+        printf("%s '", kindLabel(n->as.usage.defKind, false));
+        emitToken(n->as.usage.name);
+        printf("'");
         if (n->as.usage.type) {
             printf(" : ");
             emitQualifiedName(n->as.usage.type);

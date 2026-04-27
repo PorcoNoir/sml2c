@@ -95,7 +95,13 @@ static void synchronize(void) {
         case TOKEN_PACKAGE:
         case TOKEN_IMPORT:
         case TOKEN_PART:
+        case TOKEN_PORT:
+        case TOKEN_INTERFACE:
+        case TOKEN_ITEM:
+        case TOKEN_CONNECTION:
+        case TOKEN_FLOW:
         case TOKEN_ATTRIBUTE:
+        case TOKEN_DOC:
         case TOKEN_RIGHT_BRACE:
             return;
         default: ;
@@ -280,46 +286,67 @@ static Node* attributeDecl(void) {
     return a;
 }
 
-/*  partDef ::= "def" IDENTIFIER featureRelationships? "{" declaration* "}"
- *  Caller has already consumed "part".  Note that `:` (typing) is not
- *  meaningful for a definition, but we accept it here and let later
- *  semantic analysis reject it; the parser stays simple.            */
-static Node* partDef(void) {
-    int line = parser.previous.line;            /* 'part' just consumed */
-    advance();                                  /* eat 'def'          */
-    consume(TOKEN_IDENTIFIER, "Expected part definition name.");
+/*  partDef-style and partUsage-style rules — now generalized.
+ *
+ *  Six kinds (part / port / interface / item / connection / flow) all
+ *  share the same surface grammar.  We capture what varies between
+ *  them in a small KindInfo struct and let one set of parsing
+ *  functions consume it.                                              */
+typedef struct {
+    DefKind     kind;             /* AST tag stamped on the result      */
+    bool        allowsDirection;  /* can the usage take in/out/inout?   */
+    const char* humanName;        /* "part", "port", … for messages    */
+} KindInfo;
+
+static const KindInfo kPart       = { DEF_PART,       false, "part"       };
+static const KindInfo kPort       = { DEF_PORT,       true,  "port"       };
+static const KindInfo kInterface  = { DEF_INTERFACE,  false, "interface"  };
+static const KindInfo kItem       = { DEF_ITEM,       false, "item"       };
+static const KindInfo kConnection = { DEF_CONNECTION, false, "connection" };
+static const KindInfo kFlow       = { DEF_FLOW,       false, "flow"       };
+
+/*  definition ::= "def" IDENTIFIER featureRelationships? "{" declaration* "}"
+ *  Caller has already consumed the kind keyword (e.g. "part", "port").   */
+static Node* definition(const KindInfo* k) {
+    int line = parser.previous.line;            /* kind keyword just consumed */
+    advance();                                  /* eat 'def'                  */
+    consume(TOKEN_IDENTIFIER, "Expected definition name.");
     Token name = parser.previous;
 
     FeatureRels rels = parseFeatureRelationships();
 
-    consume(TOKEN_LEFT_BRACE, "Expected '{' after part definition name.");
+    consume(TOKEN_LEFT_BRACE, "Expected '{' after definition name.");
 
-    Node* def = astMakeNode(NODE_PART_DEF, line);
+    Node* def = astMakeNode(NODE_DEFINITION, line);
     def->as.scope.name        = name;
+    def->as.scope.defKind     = k->kind;
     def->as.scope.specializes = rels.specializes;
     def->as.scope.redefines   = rels.redefines;
-    /* rels.type is silently dropped for part def — semantic check will warn. */
+    /* rels.type and rels.multiplicity are silently dropped on a
+     * definition; semantic check will warn.                            */
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         Node* m = declaration();
         if (m) astAppendScopeMember(def, m);
         if (parser.panicMode) synchronize();
     }
-    consume(TOKEN_RIGHT_BRACE, "Expected '}' to close part definition.");
+    consume(TOKEN_RIGHT_BRACE, "Expected '}' to close definition.");
     return def;
 }
 
-/*  partUsage ::= IDENTIFIER featureRelationships? ( "{" declaration* "}" | ";" )
- *  Caller has already consumed "part".                                */
-static Node* partUsage(void) {
-    int line = parser.previous.line;            /* 'part' just consumed */
-    consume(TOKEN_IDENTIFIER, "Expected part name.");
+/*  usage ::= IDENTIFIER featureRelationships? ( "{" declaration* "}" | ";" )
+ *  Caller has already consumed the kind keyword and any direction prefix. */
+static Node* usage(const KindInfo* k, Direction dir) {
+    int line = parser.previous.line;
+    consume(TOKEN_IDENTIFIER, "Expected name.");
     Token name = parser.previous;
 
     FeatureRels rels = parseFeatureRelationships();
 
-    Node* u = astMakeNode(NODE_PART_USAGE, line);
+    Node* u = astMakeNode(NODE_USAGE, line);
     u->as.usage.name         = name;
+    u->as.usage.defKind      = k->kind;
+    u->as.usage.direction    = dir;
     u->as.usage.type         = rels.type;
     u->as.usage.specializes  = rels.specializes;
     u->as.usage.redefines    = rels.redefines;
@@ -331,18 +358,28 @@ static Node* partUsage(void) {
             if (m) astAppendUsageMember(u, m);
             if (parser.panicMode) synchronize();
         }
-        consume(TOKEN_RIGHT_BRACE, "Expected '}' to close part body.");
+        consume(TOKEN_RIGHT_BRACE, "Expected '}' to close usage body.");
     } else {
-        consume(TOKEN_SEMICOLON, "Expected ';' or '{' after part declaration.");
+        consume(TOKEN_SEMICOLON, "Expected ';' or '{' after usage.");
     }
     return u;
 }
 
-/*  partDecl ::= "part" ( partDef | partUsage )                        */
-static Node* partDecl(void) {
-    /* 'part' has just been consumed.  Look at current to disambiguate. */
-    if (check(TOKEN_DEF)) return partDef();
-    return partUsage();
+/*  Dispatch: caller has consumed the kind keyword (and any direction
+ *  prefix).  If the next token is `def`, we're a definition; otherwise
+ *  a usage.  A direction prefix is only meaningful on a usage; on a
+ *  definition it's an error.                                          */
+static Node* definitionOrUsage(const KindInfo* k, Direction dir) {
+    if (check(TOKEN_DEF)) {
+        if (dir != DIR_NONE) {
+            error("Direction modifier is not valid on a definition.");
+        }
+        return definition(k);
+    }
+    if (dir != DIR_NONE && !k->allowsDirection) {
+        error("Direction modifier is not valid on this kind of usage.");
+    }
+    return usage(k, dir);
 }
 
 /*  packageDecl ::= "package" IDENTIFIER "{" declaration* "}"          */
@@ -394,16 +431,21 @@ static Node* docDecl(void) {
     return d;
 }
 
-/*  declaration ::= visibility? ( docDecl | packageDecl | importDecl
- *                              | partDecl | attributeDecl )
+/*  declaration ::= visibility? direction? ( docDecl | packageDecl
+ *                                          | importDecl
+ *                                          | partDecl    | portDecl
+ *                                          | interfaceDecl | itemDecl
+ *                                          | connectionDecl | flowDecl
+ *                                          | attributeDecl )
  *  visibility  ::= "public" | "private" | "protected"
+ *  direction   ::= "in" | "out" | "inout"
  *
- *  Visibility is optional in any position; we consume it here once and
- *  stamp it on the resulting node so each grammar rule below stays
- *  ignorant of it.  Doc declarations don't take a visibility.        */
+ *  Visibility and direction are optional prefixes consumed once and
+ *  threaded into the resulting node, so each grammar rule below stays
+ *  ignorant of them.  A direction without a kind that allows it (or
+ *  on a definition) becomes an error inside definitionOrUsage.        */
 static Node* declaration(void) {
-    /* Doc forms come first so they don't accidentally accept a
-     * visibility prefix.                                              */
+    /* Doc forms come first — they don't take visibility or direction. */
     if (check(TOKEN_DOC) || check(TOKEN_DOC_BODY)) return docDecl();
 
     Visibility vis = VIS_DEFAULT;
@@ -411,14 +453,32 @@ static Node* declaration(void) {
     else if (match(TOKEN_PRIVATE))   vis = VIS_PRIVATE;
     else if (match(TOKEN_PROTECTED)) vis = VIS_PROTECTED;
 
+    Direction dir = DIR_NONE;
+    if      (match(TOKEN_IN))    dir = DIR_IN;
+    else if (match(TOKEN_OUT))   dir = DIR_OUT;
+    else if (match(TOKEN_INOUT)) dir = DIR_INOUT;
+
     Node* result = NULL;
-    if      (match(TOKEN_PACKAGE))   result = packageDecl();
-    else if (match(TOKEN_IMPORT))    result = importDecl();
-    else if (match(TOKEN_PART))      result = partDecl();
-    else if (match(TOKEN_ATTRIBUTE)) result = attributeDecl();
-    else {
+    if (match(TOKEN_PACKAGE)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on a package.");
+        result = packageDecl();
+    } else if (match(TOKEN_IMPORT)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on an import.");
+        result = importDecl();
+    } else if (match(TOKEN_PART))       result = definitionOrUsage(&kPart,       dir);
+    else if (match(TOKEN_PORT))         result = definitionOrUsage(&kPort,       dir);
+    else if (match(TOKEN_INTERFACE))    result = definitionOrUsage(&kInterface,  dir);
+    else if (match(TOKEN_ITEM))         result = definitionOrUsage(&kItem,       dir);
+    else if (match(TOKEN_CONNECTION))   result = definitionOrUsage(&kConnection, dir);
+    else if (match(TOKEN_FLOW))         result = definitionOrUsage(&kFlow,       dir);
+    else if (match(TOKEN_ATTRIBUTE)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on an attribute.");
+        result = attributeDecl();
+    } else {
         if (vis != VIS_DEFAULT) {
             errorAtCurrent("Visibility modifier must be followed by a declaration.");
+        } else if (dir != DIR_NONE) {
+            errorAtCurrent("Direction modifier must be followed by a declaration.");
         } else {
             errorAtCurrent("Expected declaration.");
         }
@@ -426,6 +486,8 @@ static Node* declaration(void) {
         return NULL;
     }
 
+    /* Visibility belongs only to declarations that can carry it; the
+     * helper silently drops it for kinds that can't.                  */
     astSetVisibility(result, vis);
     return result;
 }

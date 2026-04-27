@@ -123,11 +123,16 @@ static TokenType identifierType(void) {
         do { if (len == (int)(sizeof(s) - 1) && \
                  memcmp(scanner.start, s, sizeof(s) - 1) == 0) return tok; } while (0)
 
-    KW("package",   TOKEN_PACKAGE);
-    KW("import",    TOKEN_IMPORT);
-    KW("part",      TOKEN_PART);
-    KW("def",       TOKEN_DEF);
-    KW("attribute", TOKEN_ATTRIBUTE);
+    KW("package",     TOKEN_PACKAGE);
+    KW("import",      TOKEN_IMPORT);
+    KW("part",        TOKEN_PART);
+    KW("port",        TOKEN_PORT);
+    KW("interface",   TOKEN_INTERFACE);
+    KW("item",        TOKEN_ITEM);
+    KW("connection",  TOKEN_CONNECTION);
+    KW("flow",        TOKEN_FLOW);
+    KW("def",         TOKEN_DEF);
+    KW("attribute",   TOKEN_ATTRIBUTE);
     KW("ref",         TOKEN_REF);
     KW("specializes", TOKEN_SPECIALIZES);
     KW("redefines",   TOKEN_REDEFINES);
@@ -135,6 +140,9 @@ static TokenType identifierType(void) {
     KW("private",     TOKEN_PRIVATE);
     KW("protected",   TOKEN_PROTECTED);
     KW("doc",         TOKEN_DOC);
+    KW("in",          TOKEN_IN);
+    KW("out",         TOKEN_OUT);
+    KW("inout",       TOKEN_INOUT);
     KW("true",        TOKEN_TRUE);
     KW("false",       TOKEN_FALSE);
 
@@ -330,6 +338,11 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_PACKAGE:        return "PACKAGE";
     case TOKEN_IMPORT:         return "IMPORT";
     case TOKEN_PART:           return "PART";
+    case TOKEN_PORT:           return "PORT";
+    case TOKEN_INTERFACE:      return "INTERFACE";
+    case TOKEN_ITEM:           return "ITEM";
+    case TOKEN_CONNECTION:     return "CONNECTION";
+    case TOKEN_FLOW:           return "FLOW";
     case TOKEN_DEF:            return "DEF";
     case TOKEN_ATTRIBUTE:      return "ATTRIBUTE";
     case TOKEN_REF:            return "REF";
@@ -339,6 +352,9 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_PRIVATE:        return "PRIVATE";
     case TOKEN_PROTECTED:      return "PROTECTED";
     case TOKEN_DOC:            return "DOC";
+    case TOKEN_IN:             return "IN";
+    case TOKEN_OUT:            return "OUT";
+    case TOKEN_INOUT:          return "INOUT";
     case TOKEN_TRUE:           return "TRUE";
     case TOKEN_FALSE:          return "FALSE";
     case TOKEN_ERROR:          return "ERROR";

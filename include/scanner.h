@@ -43,6 +43,11 @@ typedef enum {
     TOKEN_PACKAGE,
     TOKEN_IMPORT,
     TOKEN_PART,
+    TOKEN_PORT,
+    TOKEN_INTERFACE,
+    TOKEN_ITEM,
+    TOKEN_CONNECTION,
+    TOKEN_FLOW,
     TOKEN_DEF,
     TOKEN_ATTRIBUTE,
     TOKEN_REF,
@@ -52,6 +57,9 @@ typedef enum {
     TOKEN_PRIVATE,
     TOKEN_PROTECTED,
     TOKEN_DOC,
+    TOKEN_IN,
+    TOKEN_OUT,
+    TOKEN_INOUT,
     TOKEN_TRUE, TOKEN_FALSE,
 
     /* Special -------------------------------------------------------- */
