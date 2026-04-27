@@ -61,9 +61,12 @@ static Token errorToken(const char* msg) {
 /* ----------------------------------------------- whitespace and comments
  *
  * SysML v2 has // line comments, slash-star block comments, and
- * slash-double-star doc comments.  For v0.1 we treat the doc form as
- * an ordinary block comment and discard it.  All three are swallowed
- * here so scanToken() always starts at a real character.
+ * slash-double-star doc comments.  We swallow the first two here so
+ * scanToken() always starts at a real character.  The doc-comment
+ * form is NOT swallowed — we leave it in place so scanToken() can
+ * capture it as a TOKEN_DOC_BODY.  An empty block comment
+ * (slash-star-star-slash) is still swallowed as a regular block
+ * comment.
  */
 static void skipWhitespace(void) {
     for (;;) {
@@ -80,6 +83,13 @@ static void skipWhitespace(void) {
             if (peekNext() == '/') {
                 while (peek() != '\n' && !isAtEnd()) advance();
             } else if (peekNext() == '*') {
+                /* Distinguish slash-star-star doc comment from a plain
+                 * slash-star block comment.  An empty block comment
+                 * (slash-star-star-slash, four chars) is treated as a
+                 * regular empty block comment, not a doc comment. */
+                if (scanner.current[2] == '*' && scanner.current[3] != '/') {
+                    return;                     /* leave for scanToken to capture */
+                }
                 advance(); advance();           /* consume "/" "*" */
                 while (!isAtEnd()) {
                     if (peek() == '*' && peekNext() == '/') {
@@ -124,6 +134,7 @@ static TokenType identifierType(void) {
     KW("public",      TOKEN_PUBLIC);
     KW("private",     TOKEN_PRIVATE);
     KW("protected",   TOKEN_PROTECTED);
+    KW("doc",         TOKEN_DOC);
     KW("true",        TOKEN_TRUE);
     KW("false",       TOKEN_FALSE);
 
@@ -172,6 +183,64 @@ static Token string(void) {
     return makeToken(TOKEN_STRING);
 }
 
+/* ----------------------------------------------------------- doc bodies
+ *
+ * Two paths reach a TOKEN_DOC_BODY.  In both, the token's lexeme spans
+ * just the inner content — the slash-star and star-slash delimiters
+ * are stripped, so the AST stores cleanly-printable text.
+ *
+ *   Path A (implicit slash-star-star form):  scanToken() detects the
+ *                                   leading double star and calls
+ *                                   captureCommentInterior.
+ *   Path B (explicit doc keyword form):  the parser calls scanDocBody()
+ *                                   after consuming the doc keyword.
+ */
+static Token captureCommentInterior(int openDelim, int closeDelim) {
+    /* Caller has consumed the opening "/" "*" (and any leading "*"s for
+     * the doc-comment form).  scanner.current points at the first byte
+     * of the body. */
+    (void)openDelim; (void)closeDelim;          /* reserved for future use */
+    const char* bodyStart = scanner.current;
+    while (!isAtEnd()) {
+        if (peek() == '*' && peekNext() == '/') {
+            int len = (int)(scanner.current - bodyStart);
+            advance(); advance();               /* consume */ ;
+            Token t;
+            t.type   = TOKEN_DOC_BODY;
+            t.start  = bodyStart;
+            t.length = len;
+            t.line   = scanner.line;
+            return t;
+        }
+        if (peek() == '\n') scanner.line++;
+        advance();
+    }
+    return errorToken("Unterminated doc comment.");
+}
+
+Token scanDocBody(void) {
+    /* Skip whitespace and line comments (but NOT block comments — the
+     * very next slash-star is what we want to capture).               */
+    for (;;) {
+        char c = peek();
+        if      (c == ' ' || c == '\r' || c == '\t') advance();
+        else if (c == '\n')   { scanner.line++; advance(); }
+        else if (c == '/' && peekNext() == '/') {
+            while (peek() != '\n' && !isAtEnd()) advance();
+        }
+        else break;
+    }
+    scanner.start = scanner.current;
+    if (peek() != '/' || peekNext() != '*') {
+        return errorToken("Expected '/* description */' after 'doc'.");
+    }
+    advance(); advance();                       /* consume opening / and * */
+    /* The explicit form may use slash-star or slash-star-star;
+     * tolerate the extra leading star either way. */
+    if (peek() == '*' && peekNext() != '/') advance();
+    return captureCommentInterior(0, 0);
+}
+
 /* --------------------------------------------------------- main entry */
 
 Token scanToken(void) {
@@ -179,6 +248,15 @@ Token scanToken(void) {
     scanner.start = scanner.current;
 
     if (isAtEnd()) return makeToken(TOKEN_EOF);
+
+    /* Implicit doc-comment form (slash-star-star) that skipWhitespace
+     * left for us.  We re-check here because skipWhitespace's contract
+     * is just "didn't consume it".                                    */
+    if (peek() == '/' && peekNext() == '*'
+        && scanner.current[2] == '*' && scanner.current[3] != '/') {
+        advance(); advance(); advance();        /* consume opening 3 chars */
+        return captureCommentInterior(0, 0);
+    }
 
     char c = advance();
     if (isAlpha(c)) return identifier();
@@ -248,6 +326,7 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_IDENTIFIER:     return "IDENT";
     case TOKEN_NUMBER:         return "NUMBER";
     case TOKEN_STRING:         return "STRING";
+    case TOKEN_DOC_BODY:       return "DOC_BODY";
     case TOKEN_PACKAGE:        return "PACKAGE";
     case TOKEN_IMPORT:         return "IMPORT";
     case TOKEN_PART:           return "PART";
@@ -259,6 +338,7 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_PUBLIC:         return "PUBLIC";
     case TOKEN_PRIVATE:        return "PRIVATE";
     case TOKEN_PROTECTED:      return "PROTECTED";
+    case TOKEN_DOC:            return "DOC";
     case TOKEN_TRUE:           return "TRUE";
     case TOKEN_FALSE:          return "FALSE";
     case TOKEN_ERROR:          return "ERROR";

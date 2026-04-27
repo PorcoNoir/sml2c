@@ -37,6 +37,7 @@ typedef enum {
     TOKEN_IDENTIFIER,
     TOKEN_NUMBER,
     TOKEN_STRING,
+    TOKEN_DOC_BODY,                                /* captured comment body */
 
     /* Keywords (v0.1) ----------------------------------------------- */
     TOKEN_PACKAGE,
@@ -50,6 +51,7 @@ typedef enum {
     TOKEN_PUBLIC,
     TOKEN_PRIVATE,
     TOKEN_PROTECTED,
+    TOKEN_DOC,
     TOKEN_TRUE, TOKEN_FALSE,
 
     /* Special -------------------------------------------------------- */
@@ -67,6 +69,12 @@ typedef struct {
 /* The source buffer must outlive every Token returned. */
 void  initScanner(const char* source);
 Token scanToken(void);
+
+/* Scan the body of a doc comment after a `doc` keyword has been
+ * consumed.  Whitespace before the opening slash-star is skipped,
+ * the delimiters are stripped, and the inner content is returned
+ * as TOKEN_DOC_BODY.  If no slash-star appears, TOKEN_ERROR. */
+Token scanDocBody(void);
 
 /* Pretty name for debugging / test harness. */
 const char* tokenTypeName(TokenType type);

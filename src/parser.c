@@ -47,6 +47,19 @@ static void errorAtCurrent(const char* m) { errorAt(&parser.current, m); }
 
 static void advance(void) {
     parser.previous = parser.current;
+
+    /* Context-sensitive lexing: if we just consumed `doc`, the next
+     * thing in the source is a comment-style description body that
+     * scanToken's skipWhitespace would normally throw away.  Route
+     * through the specialised entry point instead.                   */
+    if (parser.previous.type == TOKEN_DOC) {
+        parser.current = scanDocBody();
+        if (parser.current.type == TOKEN_ERROR) {
+            errorAtCurrent(parser.current.start);
+        }
+        return;
+    }
+
     for (;;) {
         parser.current = scanToken();
         if (parser.current.type != TOKEN_ERROR) break;
@@ -351,13 +364,48 @@ static Node* packageDecl(void) {
     return p;
 }
 
-/*  declaration ::= visibility? ( packageDecl | importDecl | partDecl | attributeDecl )
+/*  docDecl ::= "doc" SLASH_STAR body STAR_SLASH    explicit keyword form
+ *           |  SLASH_STAR_STAR body STAR_SLASH      implicit form
+ *
+ *  Both produce a NODE_DOC carrying the captured body.               */
+static Node* docDecl(void) {
+    int line = parser.current.line;
+    Token body;
+
+    if (match(TOKEN_DOC)) {
+        /* The advance() inside match() saw previous == TOKEN_DOC and
+         * routed through scanDocBody, so parser.current should now be
+         * the body (or an error token, already reported).            */
+        if (parser.current.type != TOKEN_DOC_BODY) {
+            return NULL;                /* error already reported     */
+        }
+        body = parser.current;
+        advance();
+    } else if (match(TOKEN_DOC_BODY)) {
+        body = parser.previous;
+    } else {
+        errorAtCurrent("Expected doc.");
+        advance();
+        return NULL;
+    }
+
+    Node* d = astMakeNode(NODE_DOC, line);
+    d->as.doc.body = body;
+    return d;
+}
+
+/*  declaration ::= visibility? ( docDecl | packageDecl | importDecl
+ *                              | partDecl | attributeDecl )
  *  visibility  ::= "public" | "private" | "protected"
  *
  *  Visibility is optional in any position; we consume it here once and
  *  stamp it on the resulting node so each grammar rule below stays
- *  ignorant of it.                                                   */
+ *  ignorant of it.  Doc declarations don't take a visibility.        */
 static Node* declaration(void) {
+    /* Doc forms come first so they don't accidentally accept a
+     * visibility prefix.                                              */
+    if (check(TOKEN_DOC) || check(TOKEN_DOC_BODY)) return docDecl();
+
     Visibility vis = VIS_DEFAULT;
     if      (match(TOKEN_PUBLIC))    vis = VIS_PUBLIC;
     else if (match(TOKEN_PRIVATE))   vis = VIS_PRIVATE;

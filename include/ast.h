@@ -28,7 +28,8 @@ typedef enum {
     NODE_PART_USAGE,      /* part p : Type;  or  part p : Type { ... }   */
     NODE_ATTRIBUTE,       /* attribute name : Type;                      */
     NODE_QUALIFIED_NAME,  /* A::B::C  (used as a type ref or import tgt) */
-    NODE_MULTIPLICITY     /* [n], [lo..hi], [*], [lo..*]                 */
+    NODE_MULTIPLICITY,    /* [n], [lo..hi], [*], [lo..*]                 */
+    NODE_DOC              /* doc keyword form, or slash-star-star form */
 } NodeKind;
 
 /* Visibility modifier on a declaration.  VIS_DEFAULT means no modifier
@@ -112,6 +113,13 @@ struct Node {
             bool upperWildcard;
             bool isRange;
         } multiplicity;
+
+        /* DOC — captured body of a doc-keyword form or implicit form.
+         * The token lexeme is the inner content with delimiters
+         * stripped, so printing is straightforward.                  */
+        struct {
+            Token body;
+        } doc;
     } as;
 };
 

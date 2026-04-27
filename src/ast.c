@@ -194,6 +194,23 @@ static void printNode(const Node* n, int depth) {
         /* Always rendered inline by the parent via emitMultiplicity().
          * This case exists only so the switch is exhaustive.          */
         break;
+
+    case NODE_DOC: {
+        /* Render the body inline-friendly: trim, single-line preview
+         * with " ..." when truncated.  The AST stores the full body. */
+        Token b = n->as.doc.body;
+        const char* start = b.start;
+        const char* end   = b.start + b.length;
+        /* Trim leading whitespace */
+        while (start < end && (*start == ' ' || *start == '\t' || *start == '\n')) start++;
+        /* Find first newline (if any) */
+        const char* nl = start;
+        while (nl < end && *nl != '\n') nl++;
+        printf("Doc \"%.*s%s\"\n",
+               (int)(nl - start), start,
+               (nl < end) ? " ..." : "");
+        break;
+    }
     }
 }
 
