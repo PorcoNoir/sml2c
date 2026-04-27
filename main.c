@@ -3,9 +3,11 @@
  *   ./sysmlc                          full pipeline, print AST
  *   ./sysmlc file.sysml               same, on a file
  *   ./sysmlc --tokens [file]          just dump the token stream
+ *   ./sysmlc --emit-json [file]       emit AST as JSON instead of pretty-printed tree
  *   ./sysmlc --no-resolve [file]      skip resolver and later passes
  *   ./sysmlc --no-typecheck [file]    skip typechecker and later passes
  *   ./sysmlc --no-redefcheck [file]   skip redefinition checker
+ *   ./sysmlc --no-connectcheck [file] skip connection checker
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,8 @@
 #include "resolver.h"
 #include "typechecker.h"
 #include "redefchecker.h"
+#include "connectchecker.h"
+#include "codegen_json.h"
 
 static const char* SAMPLE =
     "package MBSEPodcast {\n"
@@ -62,16 +66,20 @@ static void dumpTokens(const char* source) {
 
 int main(int argc, char** argv) {
     bool tokensOnly = false;
+    bool emitJsonMode = false;
     bool skipResolve = false;
     bool skipTypecheck = false;
     bool skipRedefcheck = false;
+    bool skipConnectcheck = false;
     const char* path = NULL;
     for (int i = 1; i < argc; i++) {
-        if      (strcmp(argv[i], "--tokens")        == 0) tokensOnly     = true;
-        else if (strcmp(argv[i], "--no-resolve")    == 0) skipResolve    = true;
-        else if (strcmp(argv[i], "--no-typecheck")  == 0) skipTypecheck  = true;
-        else if (strcmp(argv[i], "--no-redefcheck") == 0) skipRedefcheck = true;
-        else                                              path = argv[i];
+        if      (strcmp(argv[i], "--tokens")          == 0) tokensOnly       = true;
+        else if (strcmp(argv[i], "--emit-json")       == 0) emitJsonMode     = true;
+        else if (strcmp(argv[i], "--no-resolve")      == 0) skipResolve      = true;
+        else if (strcmp(argv[i], "--no-typecheck")    == 0) skipTypecheck    = true;
+        else if (strcmp(argv[i], "--no-redefcheck")   == 0) skipRedefcheck   = true;
+        else if (strcmp(argv[i], "--no-connectcheck") == 0) skipConnectcheck = true;
+        else                                                path = argv[i];
     }
 
     char* allocated = NULL;
@@ -93,12 +101,15 @@ int main(int argc, char** argv) {
     }
 
     if (!skipResolve) {
-        if (!resolveProgram(root))                     { free(allocated); return 65; }
-        if (!skipTypecheck && !typecheckProgram(root)) { free(allocated); return 65; }
-        if (!skipRedefcheck && !checkRedefinitions(root)) { free(allocated); return 65; }
+        if (!resolveProgram(root))                          { free(allocated); return 65; }
+        if (!skipTypecheck    && !typecheckProgram(root))   { free(allocated); return 65; }
+        if (!skipRedefcheck   && !checkRedefinitions(root)) { free(allocated); return 65; }
+        if (!skipConnectcheck && !checkConnections(root))   { free(allocated); return 65; }
     }
 
-    astPrint(root);
+    if (emitJsonMode) emitJson(stdout, root);
+    else              astPrint(root);
+
     free(allocated);
     return 0;
 }
