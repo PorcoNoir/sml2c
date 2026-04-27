@@ -143,6 +143,10 @@ static TokenType identifierType(void) {
     KW("in",          TOKEN_IN);
     KW("out",         TOKEN_OUT);
     KW("inout",       TOKEN_INOUT);
+    KW("connect",     TOKEN_CONNECT);
+    KW("to",          TOKEN_TO);
+    KW("from",        TOKEN_FROM);
+    KW("end",         TOKEN_END);
     KW("true",        TOKEN_TRUE);
     KW("false",       TOKEN_FALSE);
 
@@ -355,6 +359,10 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_IN:             return "IN";
     case TOKEN_OUT:            return "OUT";
     case TOKEN_INOUT:          return "INOUT";
+    case TOKEN_CONNECT:        return "CONNECT";
+    case TOKEN_TO:             return "TO";
+    case TOKEN_FROM:           return "FROM";
+    case TOKEN_END:            return "END";
     case TOKEN_TRUE:           return "TRUE";
     case TOKEN_FALSE:          return "FALSE";
     case TOKEN_ERROR:          return "ERROR";

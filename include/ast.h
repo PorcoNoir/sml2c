@@ -42,7 +42,8 @@ typedef enum {
     DEF_INTERFACE,
     DEF_ITEM,
     DEF_CONNECTION,
-    DEF_FLOW
+    DEF_FLOW,
+    DEF_END                /* `end name : Type;` inside a connection/flow def */
 } DefKind;
 
 /* Port direction modifier.  Currently only port usages can carry one,
@@ -66,6 +67,14 @@ typedef enum {
     VIS_PROTECTED
 } Visibility;
 
+/* Dynamic array of Node*.  Used for relationship lists (`: A, B`,
+ * `:> X, Y`) and for connector/flow endpoints.                        */
+typedef struct {
+    struct Node** items;
+    int           count;
+    int           capacity;
+} NodeList;
+
 typedef struct Node Node;
 
 struct Node {
@@ -83,21 +92,24 @@ struct Node {
             Node**     members;
             int        memberCount;
             int        memberCapacity;
-            Node*      specializes; /* `:>`  / `specializes` (DEFINITION) */
-            Node*      redefines;   /* `:>>` / `redefines`   (DEFINITION) */
+            NodeList   specializes; /* `:>`  / `specializes` (DEFINITION) */
+            NodeList   redefines;   /* `:>>` / `redefines`   (DEFINITION) */
         } scope;
 
-        /* USAGE — has an optional type and an optional body.            */
+        /* USAGE — has optional name (anonymous for bare `connect a to b`),
+         * optional type/spec/redef lists, optional multiplicity, optional
+         * connector or flow endpoint clause, and an optional body.       */
         struct {
-            Token      name;
+            Token      name;        /* length==0 means anonymous          */
             Visibility visibility;
             DefKind    defKind;
-            Direction  direction;   /* in/out/inout (port usages mostly) */
-            Node*      type;        /* `:`   NULL if no `: Type`         */
-            Node*      specializes; /* `:>`  / `specializes`             */
-            Node*      redefines;   /* `:>>` / `redefines`               */
-            Node*      multiplicity;/* `[...]`  NULL if not specified    */
-            Node**     members;     /* NULL if no `{ ... }`              */
+            Direction  direction;   /* in/out/inout (port usages mostly)  */
+            NodeList   types;       /* `: A, B`                           */
+            NodeList   specializes; /* `:> X, Y`                          */
+            NodeList   redefines;   /* `:>> P, Q`                         */
+            Node*      multiplicity;/* `[...]`  NULL if not specified     */
+            NodeList   ends;        /* connector/flow endpoints (2 elts)  */
+            Node**     members;     /* NULL if no `{ ... }`               */
             int        memberCount;
             int        memberCapacity;
         } usage;
@@ -106,9 +118,9 @@ struct Node {
         struct {
             Token      name;
             Visibility visibility;
-            Node*      type;        /* `:`   NULL if untyped             */
-            Node*      specializes; /* `:>`  / `specializes`             */
-            Node*      redefines;   /* `:>>` / `redefines`               */
+            NodeList   types;       /* `: A, B`                          */
+            NodeList   specializes; /* `:> X, Y`                         */
+            NodeList   redefines;   /* `:>> P, Q`                        */
             Node*      multiplicity;/* `[...]`  NULL if not specified    */
         } attribute;
 
@@ -161,6 +173,8 @@ void  astAppendScopeMember(Node* scope, Node* member);
 void  astAppendUsageMember(Node* usage, Node* member);
 /* For NODE_QUALIFIED_NAME: */
 void  astAppendQualifiedPart(Node* qname, Token part);
+/* Append a Node* to any NodeList (relationship lists, ends list). */
+void  astListAppend(NodeList* list, Node* item);
 /* Set a visibility modifier on whichever variant supports one. */
 void  astSetVisibility(Node* node, Visibility v);
 

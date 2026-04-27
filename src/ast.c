@@ -52,6 +52,16 @@ void astAppendQualifiedPart(Node* qname, Token part) {
     qname->as.qualifiedName.parts[qname->as.qualifiedName.partCount++] = part;
 }
 
+void astListAppend(NodeList* list, Node* item) {
+    if (list->count >= list->capacity) {
+        int newCap = (list->capacity < 4) ? 4 : list->capacity * 2;
+        list->items = (Node**)realloc(list->items, sizeof(Node*) * (size_t)newCap);
+        if (!list->items) { fprintf(stderr, "Out of memory\n"); exit(70); }
+        list->capacity = newCap;
+    }
+    list->items[list->count++] = item;
+}
+
 void astSetVisibility(Node* n, Visibility v) {
     if (!n || v == VIS_DEFAULT) return;
     switch (n->kind) {
@@ -118,15 +128,40 @@ static void emitDirection(Direction d) {
 static const char* kindLabel(DefKind k, bool isDefinition) {
     static const char* defs[] = {
         "PartDef", "PortDef", "InterfaceDef",
-        "ItemDef", "ConnectionDef", "FlowDef"
+        "ItemDef", "ConnectionDef", "FlowDef",
+        "?EndDef"   /* ends have no def form; sentinel for misuse */
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
-        "Item", "Connection", "Flow"
+        "Item", "Connection", "Flow", "End"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
     return isDefinition ? defs[idx] : uses[idx];
+}
+
+/* Emit a comma-separated list of qualified names with a leading prefix
+ * (e.g. " : " or " :> ").  Does nothing when the list is empty.       */
+static void emitNameList(const char* prefix, const NodeList* list) {
+    if (list->count == 0) return;
+    printf("%s", prefix);
+    for (int i = 0; i < list->count; i++) {
+        if (i > 0) printf(", ");
+        emitQualifiedName(list->items[i]);
+    }
+}
+
+/* Emit the connector/flow endpoint clause when a usage carries one. */
+static void emitEnds(DefKind k, const NodeList* ends) {
+    if (ends->count == 0) return;
+    const char* opener = (k == DEF_FLOW) ? " from " : " connect ";
+    printf("%s", opener);
+    /* For now the grammar produces exactly two ends; we'll relax later. */
+    for (int i = 0; i < ends->count; i++) {
+        if (i == 1) printf(" to ");
+        else if (i > 1) printf(", ");
+        emitQualifiedName(ends->items[i]);
+    }
 }
 
 static void printNode(const Node* n, int depth) {
@@ -152,14 +187,8 @@ static void printNode(const Node* n, int depth) {
         printf("%s '", kindLabel(n->as.scope.defKind, true));
         emitToken(n->as.scope.name);
         printf("'");
-        if (n->as.scope.specializes) {
-            printf(" :> ");
-            emitQualifiedName(n->as.scope.specializes);
-        }
-        if (n->as.scope.redefines) {
-            printf(" :>> ");
-            emitQualifiedName(n->as.scope.redefines);
-        }
+        emitNameList(" :> ",  &n->as.scope.specializes);
+        emitNameList(" :>> ", &n->as.scope.redefines);
         printf("\n");
         for (int i = 0; i < n->as.scope.memberCount; i++)
             printNode(n->as.scope.members[i], depth + 1);
@@ -168,22 +197,15 @@ static void printNode(const Node* n, int depth) {
     case NODE_USAGE:
         emitVisibility(n->as.usage.visibility);
         emitDirection(n->as.usage.direction);
-        printf("%s '", kindLabel(n->as.usage.defKind, false));
-        emitToken(n->as.usage.name);
-        printf("'");
-        if (n->as.usage.type) {
-            printf(" : ");
-            emitQualifiedName(n->as.usage.type);
+        printf("%s", kindLabel(n->as.usage.defKind, false));
+        if (n->as.usage.name.length > 0) {
+            printf(" '"); emitToken(n->as.usage.name); printf("'");
         }
-        if (n->as.usage.specializes) {
-            printf(" :> ");
-            emitQualifiedName(n->as.usage.specializes);
-        }
-        if (n->as.usage.redefines) {
-            printf(" :>> ");
-            emitQualifiedName(n->as.usage.redefines);
-        }
+        emitNameList(" : ",   &n->as.usage.types);
+        emitNameList(" :> ",  &n->as.usage.specializes);
+        emitNameList(" :>> ", &n->as.usage.redefines);
         emitMultiplicity(n->as.usage.multiplicity);
+        emitEnds(n->as.usage.defKind, &n->as.usage.ends);
         printf("\n");
         for (int i = 0; i < n->as.usage.memberCount; i++)
             printNode(n->as.usage.members[i], depth + 1);
@@ -192,18 +214,9 @@ static void printNode(const Node* n, int depth) {
     case NODE_ATTRIBUTE:
         emitVisibility(n->as.attribute.visibility);
         printf("Attribute '"); emitToken(n->as.attribute.name); printf("'");
-        if (n->as.attribute.type) {
-            printf(" : ");
-            emitQualifiedName(n->as.attribute.type);
-        }
-        if (n->as.attribute.specializes) {
-            printf(" :> ");
-            emitQualifiedName(n->as.attribute.specializes);
-        }
-        if (n->as.attribute.redefines) {
-            printf(" :>> ");
-            emitQualifiedName(n->as.attribute.redefines);
-        }
+        emitNameList(" : ",   &n->as.attribute.types);
+        emitNameList(" :> ",  &n->as.attribute.specializes);
+        emitNameList(" :>> ", &n->as.attribute.redefines);
         emitMultiplicity(n->as.attribute.multiplicity);
         printf("\n");
         break;

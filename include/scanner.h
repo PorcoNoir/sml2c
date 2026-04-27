@@ -60,6 +60,10 @@ typedef enum {
     TOKEN_IN,
     TOKEN_OUT,
     TOKEN_INOUT,
+    TOKEN_CONNECT,
+    TOKEN_TO,
+    TOKEN_FROM,
+    TOKEN_END,
     TOKEN_TRUE, TOKEN_FALSE,
 
     /* Special -------------------------------------------------------- */
