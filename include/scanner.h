@@ -47,6 +47,9 @@ typedef enum {
     TOKEN_REF,
     TOKEN_SPECIALIZES,
     TOKEN_REDEFINES,
+    TOKEN_PUBLIC,
+    TOKEN_PRIVATE,
+    TOKEN_PROTECTED,
     TOKEN_TRUE, TOKEN_FALSE,
 
     /* Special -------------------------------------------------------- */

@@ -121,6 +121,9 @@ static TokenType identifierType(void) {
     KW("ref",         TOKEN_REF);
     KW("specializes", TOKEN_SPECIALIZES);
     KW("redefines",   TOKEN_REDEFINES);
+    KW("public",      TOKEN_PUBLIC);
+    KW("private",     TOKEN_PRIVATE);
+    KW("protected",   TOKEN_PROTECTED);
     KW("true",        TOKEN_TRUE);
     KW("false",       TOKEN_FALSE);
 
@@ -253,6 +256,9 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_REF:            return "REF";
     case TOKEN_SPECIALIZES:    return "SPECIALIZES";
     case TOKEN_REDEFINES:      return "REDEFINES";
+    case TOKEN_PUBLIC:         return "PUBLIC";
+    case TOKEN_PRIVATE:        return "PRIVATE";
+    case TOKEN_PROTECTED:      return "PROTECTED";
     case TOKEN_TRUE:           return "TRUE";
     case TOKEN_FALSE:          return "FALSE";
     case TOKEN_ERROR:          return "ERROR";

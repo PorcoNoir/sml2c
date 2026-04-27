@@ -52,6 +52,18 @@ void astAppendQualifiedPart(Node* qname, Token part) {
     qname->as.qualifiedName.parts[qname->as.qualifiedName.partCount++] = part;
 }
 
+void astSetVisibility(Node* n, Visibility v) {
+    if (!n || v == VIS_DEFAULT) return;
+    switch (n->kind) {
+    case NODE_PACKAGE:
+    case NODE_PART_DEF:    n->as.scope.visibility     = v; break;
+    case NODE_PART_USAGE:  n->as.usage.visibility     = v; break;
+    case NODE_ATTRIBUTE:   n->as.attribute.visibility = v; break;
+    case NODE_IMPORT:      n->as.import.visibility    = v; break;
+    default: break;        /* PROGRAM, QUALIFIED_NAME, MULTIPLICITY have none */
+    }
+}
+
 /* ---------------------------------------------------------- print */
 
 static void emitIndent(int depth) {
@@ -82,6 +94,15 @@ static void emitMultiplicity(const Node* m) {
     printf("]");
 }
 
+static void emitVisibility(Visibility v) {
+    switch (v) {
+    case VIS_PUBLIC:    printf("public ");    break;
+    case VIS_PRIVATE:   printf("private ");   break;
+    case VIS_PROTECTED: printf("protected "); break;
+    case VIS_DEFAULT:   /* nothing */         break;
+    }
+}
+
 static void printNode(const Node* n, int depth) {
     if (!n) { emitIndent(depth); printf("(null)\n"); return; }
     emitIndent(depth);
@@ -94,12 +115,14 @@ static void printNode(const Node* n, int depth) {
         break;
 
     case NODE_PACKAGE:
+        emitVisibility(n->as.scope.visibility);
         printf("Package '"); emitToken(n->as.scope.name); printf("'\n");
         for (int i = 0; i < n->as.scope.memberCount; i++)
             printNode(n->as.scope.members[i], depth + 1);
         break;
 
     case NODE_PART_DEF:
+        emitVisibility(n->as.scope.visibility);
         printf("PartDef '"); emitToken(n->as.scope.name); printf("'");
         if (n->as.scope.specializes) {
             printf(" :> ");
@@ -115,6 +138,7 @@ static void printNode(const Node* n, int depth) {
         break;
 
     case NODE_PART_USAGE:
+        emitVisibility(n->as.usage.visibility);
         printf("Part '"); emitToken(n->as.usage.name); printf("'");
         if (n->as.usage.type) {
             printf(" : ");
@@ -135,6 +159,7 @@ static void printNode(const Node* n, int depth) {
         break;
 
     case NODE_ATTRIBUTE:
+        emitVisibility(n->as.attribute.visibility);
         printf("Attribute '"); emitToken(n->as.attribute.name); printf("'");
         if (n->as.attribute.type) {
             printf(" : ");
@@ -153,6 +178,7 @@ static void printNode(const Node* n, int depth) {
         break;
 
     case NODE_IMPORT:
+        emitVisibility(n->as.import.visibility);
         printf("Import ");
         emitQualifiedName(n->as.import.target);
         if (n->as.import.wildcard) printf("::*");

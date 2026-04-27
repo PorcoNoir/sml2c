@@ -351,16 +351,35 @@ static Node* packageDecl(void) {
     return p;
 }
 
-/*  declaration ::= packageDecl | importDecl | partDecl | attributeDecl */
+/*  declaration ::= visibility? ( packageDecl | importDecl | partDecl | attributeDecl )
+ *  visibility  ::= "public" | "private" | "protected"
+ *
+ *  Visibility is optional in any position; we consume it here once and
+ *  stamp it on the resulting node so each grammar rule below stays
+ *  ignorant of it.                                                   */
 static Node* declaration(void) {
-    if (match(TOKEN_PACKAGE))   return packageDecl();
-    if (match(TOKEN_IMPORT))    return importDecl();
-    if (match(TOKEN_PART))      return partDecl();
-    if (match(TOKEN_ATTRIBUTE)) return attributeDecl();
+    Visibility vis = VIS_DEFAULT;
+    if      (match(TOKEN_PUBLIC))    vis = VIS_PUBLIC;
+    else if (match(TOKEN_PRIVATE))   vis = VIS_PRIVATE;
+    else if (match(TOKEN_PROTECTED)) vis = VIS_PROTECTED;
 
-    errorAtCurrent("Expected declaration.");
-    advance();                          /* make progress so we don't loop */
-    return NULL;
+    Node* result = NULL;
+    if      (match(TOKEN_PACKAGE))   result = packageDecl();
+    else if (match(TOKEN_IMPORT))    result = importDecl();
+    else if (match(TOKEN_PART))      result = partDecl();
+    else if (match(TOKEN_ATTRIBUTE)) result = attributeDecl();
+    else {
+        if (vis != VIS_DEFAULT) {
+            errorAtCurrent("Visibility modifier must be followed by a declaration.");
+        } else {
+            errorAtCurrent("Expected declaration.");
+        }
+        advance();                  /* make progress so we don't loop */
+        return NULL;
+    }
+
+    astSetVisibility(result, vis);
+    return result;
 }
 
 /* ===================================================== entry point */

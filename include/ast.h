@@ -31,6 +31,17 @@ typedef enum {
     NODE_MULTIPLICITY     /* [n], [lo..hi], [*], [lo..*]                 */
 } NodeKind;
 
+/* Visibility modifier on a declaration.  VIS_DEFAULT means no modifier
+ * appeared in source — SysML treats that as effectively `public` at
+ * package scope, but we keep it distinct so the printer can echo
+ * source faithfully. */
+typedef enum {
+    VIS_DEFAULT = 0,      /* no modifier in source            */
+    VIS_PUBLIC,
+    VIS_PRIVATE,
+    VIS_PROTECTED
+} Visibility;
+
 typedef struct Node Node;
 
 struct Node {
@@ -39,39 +50,43 @@ struct Node {
     union {
         /* PROGRAM, PACKAGE, PART_DEF — all "named scopes" with members. */
         struct {
-            Token  name;            /* unused for PROGRAM                */
-            Node** members;
-            int    memberCount;
-            int    memberCapacity;
-            Node*  specializes;     /* `:>`  / `specializes` (PART_DEF)  */
-            Node*  redefines;       /* `:>>` / `redefines`   (PART_DEF)  */
+            Token      name;        /* unused for PROGRAM                */
+            Visibility visibility;
+            Node**     members;
+            int        memberCount;
+            int        memberCapacity;
+            Node*      specializes; /* `:>`  / `specializes` (PART_DEF)  */
+            Node*      redefines;   /* `:>>` / `redefines`   (PART_DEF)  */
         } scope;
 
         /* PART_USAGE — has an optional type and an optional body.       */
         struct {
-            Token  name;
-            Node*  type;            /* `:`   NULL if no `: Type`         */
-            Node*  specializes;     /* `:>`  / `specializes`             */
-            Node*  redefines;       /* `:>>` / `redefines`               */
-            Node*  multiplicity;    /* `[...]`  NULL if not specified    */
-            Node** members;         /* NULL if no `{ ... }`              */
-            int    memberCount;
-            int    memberCapacity;
+            Token      name;
+            Visibility visibility;
+            Node*      type;        /* `:`   NULL if no `: Type`         */
+            Node*      specializes; /* `:>`  / `specializes`             */
+            Node*      redefines;   /* `:>>` / `redefines`               */
+            Node*      multiplicity;/* `[...]`  NULL if not specified    */
+            Node**     members;     /* NULL if no `{ ... }`              */
+            int        memberCount;
+            int        memberCapacity;
         } usage;
 
         /* ATTRIBUTE — name + optional type/specializes/redefines.      */
         struct {
-            Token name;
-            Node* type;             /* `:`   NULL if untyped             */
-            Node* specializes;      /* `:>`  / `specializes`             */
-            Node* redefines;        /* `:>>` / `redefines`               */
-            Node* multiplicity;     /* `[...]`  NULL if not specified    */
+            Token      name;
+            Visibility visibility;
+            Node*      type;        /* `:`   NULL if untyped             */
+            Node*      specializes; /* `:>`  / `specializes`             */
+            Node*      redefines;   /* `:>>` / `redefines`               */
+            Node*      multiplicity;/* `[...]`  NULL if not specified    */
         } attribute;
 
         /* IMPORT — points to a QUALIFIED_NAME, plus a wildcard flag.    */
         struct {
-            Node* target;
-            bool  wildcard;
+            Visibility visibility;
+            Node*      target;
+            bool       wildcard;
         } import;
 
         /* QUALIFIED_NAME — array of identifier tokens (A::B::C → 3).    */
@@ -109,6 +124,8 @@ void  astAppendScopeMember(Node* scope, Node* member);
 void  astAppendUsageMember(Node* usage, Node* member);
 /* For NODE_QUALIFIED_NAME: */
 void  astAppendQualifiedPart(Node* qname, Token part);
+/* Set a visibility modifier on whichever variant supports one. */
+void  astSetVisibility(Node* node, Visibility v);
 
 /* ---- inspection ---- */
 void  astPrint(const Node* root);
