@@ -38,6 +38,23 @@ static void undefinedNameError(int line, Token name) {
     errorCount++;
 }
 
+/* Forward declaration: defined later, but needed by undefinedMemberError
+ * to print the container's name in the error message. */
+static Token nodeName(const Node* n);
+
+static void undefinedMemberError(int line, Token name, const Node* container) {
+    Token cname = nodeName(container);
+    if (cname.length > 0) {
+        fprintf(stderr, "[line %d] Error: '%.*s' has no member '%.*s'.\n",
+                line, cname.length, cname.start,
+                name.length, name.start);
+    } else {
+        fprintf(stderr, "[line %d] Error: No member '%.*s' in container.\n",
+                line, name.length, name.start);
+    }
+    errorCount++;
+}
+
 static void duplicateNameError(int line, Token name, int prevLine) {
     fprintf(stderr,
             "[line %d] Error: Duplicate declaration of '%.*s' "
@@ -173,6 +190,86 @@ static void declareMembers(Scope* inner, Node** members, int count) {
     }
 }
 
+/* ---- member-of-type lookup ------------------------------------- *
+ *
+ * Given a container node, look up a name as one of its (possibly
+ * inherited) members.  The walk shape depends on the container kind:
+ *
+ *   PACKAGE / PROGRAM : direct members only.
+ *   DEFINITION        : direct members, then recurse through the
+ *                       specializes chain.
+ *   USAGE             : direct body members, then through the types
+ *                       (`: T`) chain, then through the usage's own
+ *                       specializes (`:>` on a usage).
+ *   ATTRIBUTE         : navigate through the attribute's type
+ *                       (so `attribute x : T` lets you reach T's
+ *                        members via `x.something`).
+ *
+ * Cycles in the inheritance graph are defanged with a depth bound. */
+
+static const Node* lookupMemberDepth(const Node* container, Token name, int depth);
+
+/* Walk a list of supertype/type references, calling lookupMemberDepth
+ * on each one's resolved target. */
+static const Node* searchInheritedMembers(const NodeList* list, Token name, int depth) {
+    if (depth >= 32) return NULL;
+    for (int i = 0; i < list->count; i++) {
+        const Node* ref = list->items[i];
+        if (!ref || ref->kind != NODE_QUALIFIED_NAME) continue;
+        const Node* ancestor = ref->as.qualifiedName.resolved;
+        if (!ancestor) continue;
+        const Node* found = lookupMemberDepth(ancestor, name, depth + 1);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+static const Node* lookupMemberDepth(const Node* container, Token name, int depth) {
+    if (!container || depth >= 32) return NULL;
+
+    /* Step 1 — look at the container's own direct members, if any. */
+    Node** members = NULL;
+    int    memberCount = 0;
+    switch (container->kind) {
+    case NODE_PROGRAM:
+    case NODE_PACKAGE:
+    case NODE_DEFINITION:
+        members = container->as.scope.members;
+        memberCount = container->as.scope.memberCount;
+        break;
+    case NODE_USAGE:
+        members = container->as.usage.members;
+        memberCount = container->as.usage.memberCount;
+        break;
+    default:
+        break;     /* attributes, qualified names, etc. have no direct members */
+    }
+    for (int i = 0; i < memberCount; i++) {
+        Node* m = members[i];
+        Token mName = nodeName(m);
+        if (mName.length > 0 && tokensEqual(mName, name)) return m;
+    }
+
+    /* Step 2 — follow inheritance / type links into other containers. */
+    switch (container->kind) {
+    case NODE_DEFINITION:
+        return searchInheritedMembers(&container->as.scope.specializes, name, depth);
+    case NODE_USAGE: {
+        const Node* r = searchInheritedMembers(&container->as.usage.types, name, depth);
+        if (r) return r;
+        return searchInheritedMembers(&container->as.usage.specializes, name, depth);
+    }
+    case NODE_ATTRIBUTE:
+        return searchInheritedMembers(&container->as.attribute.types, name, depth);
+    default:
+        return NULL;
+    }
+}
+
+const Node* lookupMember(const Node* container, Token name) {
+    return lookupMemberDepth(container, name, 0);
+}
+
 /* ---- wildcard import search ------------------------------------- */
 
 /* Look up `name` in any wildcard-imported package whose target was
@@ -214,30 +311,44 @@ static bool anyUnresolvedWildcardInScope(const Scope* scope) {
 
 static void resolveQualifiedNameImpl(Node* qname, Scope* current, bool report) {
     if (!qname || qname->kind != NODE_QUALIFIED_NAME) return;
-    if (qname->as.qualifiedName.partCount == 0) return;
+    int n = qname->as.qualifiedName.partCount;
+    if (n == 0) return;
     /* Idempotent: if someone (the builtin, or a previous pass) already
      * filled this in, don't clobber. */
     if (qname->as.qualifiedName.resolved) return;
 
+    /* (1) Resolve the first segment via the scope chain, falling back
+     * to wildcard imports. */
     Token first = qname->as.qualifiedName.parts[0];
+    const Node* node = lookupChain(current, first);
+    if (!node) node = searchWildcardImports(current, first);
 
-    /* (1) Walk the scope chain. */
-    const Node* found = lookupChain(current, first);
-    if (found) { qname->as.qualifiedName.resolved = found; return; }
+    if (!node) {
+        /* First segment unresolved.  Two tentative-accept paths
+         * preserve behavior for cases where we can't blame the user:
+         *   - multi-segment names whose head might be a top-level
+         *     package we don't load
+         *   - any name when an unresolved wildcard import is in scope */
+        if (n > 1) return;
+        if (anyUnresolvedWildcardInScope(current)) return;
+        if (report) undefinedNameError(qname->line, first);
+        return;
+    }
 
-    /* (2) Search wildcard imports. */
-    found = searchWildcardImports(current, first);
-    if (found) { qname->as.qualifiedName.resolved = found; return; }
+    /* (2) Walk subsequent segments as members of the previous
+     * resolution.  A failure mid-chain is an error: we know enough
+     * to say the user got the path wrong. */
+    for (int i = 1; i < n; i++) {
+        Token seg = qname->as.qualifiedName.parts[i];
+        const Node* member = lookupMember(node, seg);
+        if (!member) {
+            if (report) undefinedMemberError(qname->line, seg, node);
+            return;
+        }
+        node = member;
+    }
 
-    /* (3) Multi-segment names whose first segment isn't known may
-     * refer to a top-level package we don't load.  Accept tentatively. */
-    if (qname->as.qualifiedName.partCount > 1) return;
-
-    /* (4) If any wildcard import has an UNRESOLVED target, the name
-     * might come from there.  Accept tentatively. */
-    if (anyUnresolvedWildcardInScope(current)) return;
-
-    if (report) undefinedNameError(qname->line, first);
+    qname->as.qualifiedName.resolved = node;
 }
 
 static void resolveQualifiedName(Node* qname, Scope* current) {
@@ -251,6 +362,24 @@ static void tryResolveQualifiedName(Node* qname, Scope* current) {
 static void resolveNodeList(NodeList* list, Scope* current) {
     for (int i = 0; i < list->count; i++) {
         resolveQualifiedName(list->items[i], current);
+    }
+}
+
+/* Resolve only the multi-segment qnames in a list, skipping any
+ * single-segment ones.  Used for redefines: single-segment redef
+ * targets (`:>> torque`) need supertype-based lookup, not local
+ * scope lookup, so the redefinition checker handles those.  But
+ * multi-segment targets (`:>> Engine::torque`) are just regular
+ * qualified-name lookups that the resolver knows how to do via
+ * lookupMember — so we do them here and the redef checker can
+ * focus on validation rather than lookup. */
+static void resolveMultiSegmentRedefs(NodeList* list, Scope* current) {
+    for (int i = 0; i < list->count; i++) {
+        Node* qname = list->items[i];
+        if (!qname || qname->kind != NODE_QUALIFIED_NAME) continue;
+        if (qname->as.qualifiedName.partCount > 1) {
+            resolveQualifiedName(qname, current);
+        }
     }
 }
 
@@ -306,10 +435,11 @@ static void resolveNode(Node* n, Scope* current) {
     case NODE_DEFINITION: {
         /* Specializes points at other top-level names — outer scope. */
         resolveNodeList(&n->as.scope.specializes, current);
-        /* Redefines is intentionally NOT resolved here.  Its semantics
-         * are "the same-named feature in some supertype," which the
-         * dedicated redefinition pass handles by walking specializes
-         * transitively.  Local-scope lookup would self-resolve. */
+        /* Single-segment redefs are handled by the redefinition pass
+         * (they need supertype lookup, not local scope).  Multi-segment
+         * ones are regular qualified-name lookups, so we do them here
+         * and the redef pass just validates. */
+        resolveMultiSegmentRedefs(&n->as.scope.redefines, current);
 
         Scope inner = { .parent = current, .what = "definition" };
         resolveScopeBody(&inner, n->as.scope.members, n->as.scope.memberCount);
@@ -319,9 +449,10 @@ static void resolveNode(Node* n, Scope* current) {
 
     case NODE_USAGE: {
         /* Type, spec, and endpoint refs resolve in OUTER scope.
-         * Redefines is left for the redefinition pass. */
+         * Redefines: same split as definitions — see above. */
         resolveNodeList(&n->as.usage.types,       current);
         resolveNodeList(&n->as.usage.specializes, current);
+        resolveMultiSegmentRedefs(&n->as.usage.redefines, current);
         resolveNodeList(&n->as.usage.ends,        current);
 
         if (n->as.usage.memberCount > 0) {
@@ -336,7 +467,7 @@ static void resolveNode(Node* n, Scope* current) {
     case NODE_ATTRIBUTE:
         resolveNodeList(&n->as.attribute.types,       current);
         resolveNodeList(&n->as.attribute.specializes, current);
-        /* Redefines: see comment in NODE_DEFINITION case. */
+        resolveMultiSegmentRedefs(&n->as.attribute.redefines, current);
         resolveExpression(n->as.attribute.defaultValue, current);
         break;
 

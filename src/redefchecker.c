@@ -21,6 +21,7 @@
 #include <stdarg.h>
 
 #include "redefchecker.h"
+#include "resolver.h"      /* for lookupMember */
 #include "typechecker.h"   /* for specializesType */
 
 /* ---- module-level state ---------------------------------------- */
@@ -39,86 +40,43 @@ static void redefError(int line, const char* fmt, ...) {
 
 /* ---- small AST helpers ----------------------------------------- */
 
-static bool tokensEqual(Token a, Token b) {
-    if (a.length != b.length) return false;
-    return memcmp(a.start, b.start, (size_t)a.length) == 0;
-}
-
-static Token nodeName(const Node* n) {
-    static const Token empty = {0};
-    if (!n) return empty;
-    switch (n->kind) {
-    case NODE_PACKAGE:
-    case NODE_DEFINITION: return n->as.scope.name;
-    case NODE_USAGE:      return n->as.usage.name;
-    case NODE_ATTRIBUTE:  return n->as.attribute.name;
-    default:              return empty;
-    }
-}
-
 /* ---- supertype search ------------------------------------------ */
-
-/* Forward declarations for the mutually-recursive walk. */
-static const Node* searchAncestorMembers(const Node* node, Token name, int depth);
-
-/* Search a list of supertype references — for each resolved target,
- * try its direct members and then recurse into its own supertypes. */
-static const Node* searchListAncestors(const NodeList* list, Token name, int depth) {
-    if (depth >= 32) return NULL;
-    for (int i = 0; i < list->count; i++) {
-        const Node* ref = list->items[i];
-        if (!ref || ref->kind != NODE_QUALIFIED_NAME) continue;
-        const Node* ancestor = ref->as.qualifiedName.resolved;
-        if (!ancestor) continue;
-        const Node* found = searchAncestorMembers(ancestor, name, depth + 1);
-        if (found) return found;
-    }
-    return NULL;
-}
-
-/* Look at a node's direct named members for one matching `name`. */
-static const Node* searchDirectMembers(Node** members, int count, Token name) {
-    for (int i = 0; i < count; i++) {
-        Node* m = members[i];
-        Token mName = nodeName(m);
-        if (mName.length > 0 && tokensEqual(mName, name)) return m;
-    }
-    return NULL;
-}
-
-/* Search a node's direct members, then recurse into ITS supertypes.
- * Used as the recursive step from searchListAncestors.            */
-static const Node* searchAncestorMembers(const Node* node, Token name, int depth) {
-    if (!node || depth >= 32) return NULL;
-    if (node->kind == NODE_DEFINITION) {
-        const Node* m = searchDirectMembers(node->as.scope.members,
-                                            node->as.scope.memberCount, name);
-        if (m) return m;
-        return searchListAncestors(&node->as.scope.specializes, name, depth);
-    }
-    if (node->kind == NODE_USAGE) {
-        const Node* m = searchDirectMembers(node->as.usage.members,
-                                            node->as.usage.memberCount, name);
-        if (m) return m;
-        const Node* r = searchListAncestors(&node->as.usage.types, name, depth);
-        if (r) return r;
-        return searchListAncestors(&node->as.usage.specializes, name, depth);
-    }
-    return NULL;
-}
 
 /* For a feature inside `owner`, look up `name` in owner's strict
  * supertypes — that is, NOT in owner's own members, but in whatever
- * owner specializes (and for usages, also their types).            */
+ * owner specializes (and for usages, also in their types).  We
+ * iterate the owner's direct supertype references and call the
+ * resolver's lookupMember on each — which already handles the
+ * transitive walk through that supertype's own ancestors.        */
 static const Node* findInSupertypes(const Node* owner, Token name) {
     if (!owner) return NULL;
+    const NodeList* specializes = NULL;
+    const NodeList* types       = NULL;
     if (owner->kind == NODE_DEFINITION) {
-        return searchListAncestors(&owner->as.scope.specializes, name, 0);
+        specializes = &owner->as.scope.specializes;
+    } else if (owner->kind == NODE_USAGE) {
+        types       = &owner->as.usage.types;
+        specializes = &owner->as.usage.specializes;
+    } else {
+        return NULL;
     }
-    if (owner->kind == NODE_USAGE) {
-        const Node* r = searchListAncestors(&owner->as.usage.types, name, 0);
-        if (r) return r;
-        return searchListAncestors(&owner->as.usage.specializes, name, 0);
+    if (types) {
+        for (int i = 0; i < types->count; i++) {
+            const Node* ref = types->items[i];
+            if (!ref || ref->kind != NODE_QUALIFIED_NAME) continue;
+            const Node* ancestor = ref->as.qualifiedName.resolved;
+            const Node* found = lookupMember(ancestor, name);
+            if (found) return found;
+        }
+    }
+    if (specializes) {
+        for (int i = 0; i < specializes->count; i++) {
+            const Node* ref = specializes->items[i];
+            if (!ref || ref->kind != NODE_QUALIFIED_NAME) continue;
+            const Node* ancestor = ref->as.qualifiedName.resolved;
+            const Node* found = lookupMember(ancestor, name);
+            if (found) return found;
+        }
     }
     return NULL;
 }
@@ -152,25 +110,33 @@ static void checkOneRedef(Node* targetQname, const Node* owner, const Node* rede
     int n = targetQname->as.qualifiedName.partCount;
     if (n == 0) return;
 
-    /* Multi-segment redef targets need member-of-type resolution,
-     * which the project hasn't built yet.  Skip silently. */
-    if (n > 1) return;
-
-    Token targetName = targetQname->as.qualifiedName.parts[0];
-    const Node* found = findInSupertypes(owner, targetName);
-
+    /* The label used in error messages — last segment for multi-segment
+     * forms, the only segment for single-segment.                      */
+    Token displayName = targetQname->as.qualifiedName.parts[n - 1];
     char nameBuf[128];
-    nameLexeme(targetName, nameBuf, sizeof nameBuf);
+    nameLexeme(displayName, nameBuf, sizeof nameBuf);
 
-    if (!found) {
-        redefError(targetQname->line,
-                   "Cannot redefine '%s': no such feature in any supertype.",
-                   nameBuf);
-        return;
+    const Node* found = NULL;
+
+    if (n == 1) {
+        /* Single-segment: supertype walk.  This is what `:>> torque`
+         * means — find an inherited feature with that name.            */
+        found = findInSupertypes(owner, displayName);
+        if (!found) {
+            redefError(targetQname->line,
+                       "Cannot redefine '%s': no such feature in any supertype.",
+                       nameBuf);
+            return;
+        }
+        targetQname->as.qualifiedName.resolved = found;
+    } else {
+        /* Multi-segment: the resolver already pre-resolved this via
+         * lookupMember.  If resolution succeeded we use it; if it
+         * failed, the resolver already reported a focused error
+         * ("'X' has no member 'Y'") so we stay silent here.            */
+        found = targetQname->as.qualifiedName.resolved;
+        if (!found) return;
     }
-
-    /* Stamp the resolution that the resolver intentionally skipped. */
-    targetQname->as.qualifiedName.resolved = found;
 
     /* The redefined target must be a feature — attribute or usage.
      * Datatype/part definitions are specialized via :>, not redefined. */
@@ -181,9 +147,8 @@ static void checkOneRedef(Node* targetQname, const Node* owner, const Node* rede
         return;
     }
 
-    /* For now we only check attribute-on-attribute redefinition's
-     * type compatibility.  Mixed-kind redefs (e.g. usage redefining
-     * an attribute) are flagged here as a category mismatch.       */
+    /* Mixed-kind redefs (e.g. attribute redefining a usage) are flagged
+     * as a category mismatch.                                        */
     if (redefiningAttr->kind == NODE_ATTRIBUTE && found->kind != NODE_ATTRIBUTE) {
         redefError(targetQname->line,
                    "Attribute cannot redefine non-attribute feature '%s'.",
