@@ -12,6 +12,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "parser.h"
 #include "scanner.h"
 
@@ -103,6 +104,7 @@ static Node* qualifiedName(void);
  *      ':'  qualifiedName            (typing)
  *      ':>'  / 'specializes' qname   (subsetting / specialization)
  *      ':>>' / 'redefines'   qname   (redefinition)
+ *      '['  multiplicity ']'         (count / range)
  *
  * The clauses can appear in any order, but each at most once.  This
  * helper consumes whatever clauses are present, fills in the FeatureRels
@@ -112,12 +114,58 @@ typedef struct {
     Node* type;
     Node* specializes;
     Node* redefines;
+    Node* multiplicity;
 } FeatureRels;
 
+/* Convert a TOKEN_NUMBER's lexeme to a long.  We copy into a local
+ * buffer because the token isn't null-terminated. */
+static long tokenToLong(Token t) {
+    char buf[64];
+    int n = (t.length < 63) ? t.length : 63;
+    memcpy(buf, t.start, (size_t)n);
+    buf[n] = '\0';
+    return strtol(buf, NULL, 10);
+}
+
+/*  multiplicity ::= "[" ( NUMBER | "*" ) ( ".." ( NUMBER | "*" ) )? "]"
+ *  Caller has already consumed the opening '['.                       */
+static Node* parseMultiplicity(void) {
+    int line = parser.previous.line;
+    Node* m = astMakeNode(NODE_MULTIPLICITY, line);
+    /* All fields zeroed by astMakeNode's calloc. */
+
+    /* ---- lower bound (or sole value) -------------------------------- */
+    if (match(TOKEN_STAR)) {
+        m->as.multiplicity.lowerWildcard = true;
+    } else if (match(TOKEN_NUMBER)) {
+        m->as.multiplicity.lower = tokenToLong(parser.previous);
+    } else {
+        errorAtCurrent("Expected number or '*' in multiplicity.");
+    }
+
+    /* ---- optional ".." upper bound ---------------------------------- */
+    if (match(TOKEN_DOT_DOT)) {
+        m->as.multiplicity.isRange = true;
+        if (match(TOKEN_STAR)) {
+            m->as.multiplicity.upperWildcard = true;
+        } else if (match(TOKEN_NUMBER)) {
+            m->as.multiplicity.upper = tokenToLong(parser.previous);
+        } else {
+            errorAtCurrent("Expected number or '*' after '..'.");
+        }
+    }
+
+    consume(TOKEN_RIGHT_BRACKET, "Expected ']' to close multiplicity.");
+    return m;
+}
+
 static FeatureRels parseFeatureRelationships(void) {
-    FeatureRels r = { NULL, NULL, NULL };
+    FeatureRels r = { NULL, NULL, NULL, NULL };
     for (;;) {
-        if (match(TOKEN_COLON)) {
+        if (match(TOKEN_LEFT_BRACKET)) {
+            if (r.multiplicity) error("Duplicate multiplicity.");
+            r.multiplicity = parseMultiplicity();
+        } else if (match(TOKEN_COLON)) {
             if (r.type) error("Duplicate type clause.");
             r.type = qualifiedName();
         } else if (match(TOKEN_COLON_GREATER) || match(TOKEN_SPECIALIZES)) {
@@ -211,10 +259,11 @@ static Node* attributeDecl(void) {
     consume(TOKEN_SEMICOLON, "Expected ';' after attribute.");
 
     Node* a = astMakeNode(NODE_ATTRIBUTE, line);
-    a->as.attribute.name        = name;
-    a->as.attribute.type        = rels.type;
-    a->as.attribute.specializes = rels.specializes;
-    a->as.attribute.redefines   = rels.redefines;
+    a->as.attribute.name         = name;
+    a->as.attribute.type         = rels.type;
+    a->as.attribute.specializes  = rels.specializes;
+    a->as.attribute.redefines    = rels.redefines;
+    a->as.attribute.multiplicity = rels.multiplicity;
     return a;
 }
 
@@ -257,10 +306,11 @@ static Node* partUsage(void) {
     FeatureRels rels = parseFeatureRelationships();
 
     Node* u = astMakeNode(NODE_PART_USAGE, line);
-    u->as.usage.name        = name;
-    u->as.usage.type        = rels.type;
-    u->as.usage.specializes = rels.specializes;
-    u->as.usage.redefines   = rels.redefines;
+    u->as.usage.name         = name;
+    u->as.usage.type         = rels.type;
+    u->as.usage.specializes  = rels.specializes;
+    u->as.usage.redefines    = rels.redefines;
+    u->as.usage.multiplicity = rels.multiplicity;
 
     if (match(TOKEN_LEFT_BRACE)) {
         while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {

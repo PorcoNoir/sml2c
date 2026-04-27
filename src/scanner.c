@@ -190,7 +190,7 @@ Token scanToken(void) {
     case ']': return makeToken(TOKEN_RIGHT_BRACKET);
     case ';': return makeToken(TOKEN_SEMICOLON);
     case ',': return makeToken(TOKEN_COMMA);
-    case '.': return makeToken(TOKEN_DOT);
+    case '.': return makeToken(match('.') ? TOKEN_DOT_DOT : TOKEN_DOT);
     case '+': return makeToken(TOKEN_PLUS);
     case '-': return makeToken(TOKEN_MINUS);
     case '*': return makeToken(TOKEN_STAR);
@@ -225,6 +225,7 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_SEMICOLON:      return "SEMI";
     case TOKEN_COMMA:          return "COMMA";
     case TOKEN_DOT:            return "DOT";
+    case TOKEN_DOT_DOT:        return "DOT_DOT";
     case TOKEN_PLUS:           return "PLUS";
     case TOKEN_MINUS:          return "MINUS";
     case TOKEN_STAR:           return "STAR";

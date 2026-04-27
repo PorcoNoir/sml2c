@@ -22,7 +22,7 @@
  *   Feature is consumed by Feature-usage packages (Vehicle, User, …).
  */
 
-library package Feature {
+package Feature {
     doc
     /*
      * Product Feature defined as a capability the product must perform.

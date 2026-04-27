@@ -69,6 +69,19 @@ static void emitQualifiedName(const Node* q) {
     }
 }
 
+static void emitMultiplicity(const Node* m) {
+    if (!m) return;
+    printf(" [");
+    if (m->as.multiplicity.lowerWildcard) printf("*");
+    else                                  printf("%ld", m->as.multiplicity.lower);
+    if (m->as.multiplicity.isRange) {
+        printf("..");
+        if (m->as.multiplicity.upperWildcard) printf("*");
+        else                                  printf("%ld", m->as.multiplicity.upper);
+    }
+    printf("]");
+}
+
 static void printNode(const Node* n, int depth) {
     if (!n) { emitIndent(depth); printf("(null)\n"); return; }
     emitIndent(depth);
@@ -115,6 +128,7 @@ static void printNode(const Node* n, int depth) {
             printf(" :>> ");
             emitQualifiedName(n->as.usage.redefines);
         }
+        emitMultiplicity(n->as.usage.multiplicity);
         printf("\n");
         for (int i = 0; i < n->as.usage.memberCount; i++)
             printNode(n->as.usage.members[i], depth + 1);
@@ -134,6 +148,7 @@ static void printNode(const Node* n, int depth) {
             printf(" :>> ");
             emitQualifiedName(n->as.attribute.redefines);
         }
+        emitMultiplicity(n->as.attribute.multiplicity);
         printf("\n");
         break;
 
@@ -147,6 +162,11 @@ static void printNode(const Node* n, int depth) {
     case NODE_QUALIFIED_NAME:
         emitQualifiedName(n);
         printf("\n");
+        break;
+
+    case NODE_MULTIPLICITY:
+        /* Always rendered inline by the parent via emitMultiplicity().
+         * This case exists only so the switch is exhaustive.          */
         break;
     }
 }

@@ -27,6 +27,7 @@ typedef enum {
     TOKEN_COLON, TOKEN_COLON_COLON,                /* : ::   */
     TOKEN_COLON_GREATER,                           /* :>     specializes */
     TOKEN_COLON_GREATER_GREATER,                   /* :>>    redefines   */
+    TOKEN_DOT_DOT,                                 /* ..     range op    */
     TOKEN_EQUAL, TOKEN_EQUAL_EQUAL,                /* = == */
     TOKEN_BANG_EQUAL,                              /* != */
     TOKEN_LESS, TOKEN_LESS_EQUAL,                  /* < <= */

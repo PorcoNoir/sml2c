@@ -27,7 +27,8 @@ typedef enum {
     NODE_PART_DEF,        /* part def Name { ... }                       */
     NODE_PART_USAGE,      /* part p : Type;  or  part p : Type { ... }   */
     NODE_ATTRIBUTE,       /* attribute name : Type;                      */
-    NODE_QUALIFIED_NAME   /* A::B::C  (used as a type ref or import tgt) */
+    NODE_QUALIFIED_NAME,  /* A::B::C  (used as a type ref or import tgt) */
+    NODE_MULTIPLICITY     /* [n], [lo..hi], [*], [lo..*]                 */
 } NodeKind;
 
 typedef struct Node Node;
@@ -52,6 +53,7 @@ struct Node {
             Node*  type;            /* `:`   NULL if no `: Type`         */
             Node*  specializes;     /* `:>`  / `specializes`             */
             Node*  redefines;       /* `:>>` / `redefines`               */
+            Node*  multiplicity;    /* `[...]`  NULL if not specified    */
             Node** members;         /* NULL if no `{ ... }`              */
             int    memberCount;
             int    memberCapacity;
@@ -63,6 +65,7 @@ struct Node {
             Node* type;             /* `:`   NULL if untyped             */
             Node* specializes;      /* `:>`  / `specializes`             */
             Node* redefines;        /* `:>>` / `redefines`               */
+            Node* multiplicity;     /* `[...]`  NULL if not specified    */
         } attribute;
 
         /* IMPORT — points to a QUALIFIED_NAME, plus a wildcard flag.    */
@@ -77,6 +80,23 @@ struct Node {
             int    partCount;
             int    partCapacity;
         } qualifiedName;
+
+        /* MULTIPLICITY — `[n]`, `[lo..hi]`, `[*]`, `[lo..*]`.
+         *
+         * For `[3]`:        lower=3,  upper=0,  isRange=false
+         * For `[1..5]`:     lower=1,  upper=5,  isRange=true
+         * For `[0..*]`:     lower=0,  upperWildcard=true, isRange=true
+         * For `[*]`:        lowerWildcard=true, isRange=false
+         *
+         * Once expressions land, lower/upper become Node* expression
+         * trees; for now they're just integer literals.               */
+        struct {
+            long lower;
+            long upper;
+            bool lowerWildcard;
+            bool upperWildcard;
+            bool isRange;
+        } multiplicity;
     } as;
 };
 
