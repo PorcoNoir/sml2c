@@ -30,7 +30,7 @@ package TypedDemo {
         attribute idle_check : Boolean = !active;
 
         // Identifier reference: torque is Real, fits Real
-        attribute alias : Real = torque;
+        attribute alt : Real = torque;
 
         // Equality on compatible types → Boolean
         attribute matches : Boolean = redline == 7000;

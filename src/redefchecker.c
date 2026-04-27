@@ -252,6 +252,22 @@ static void checkOneRedef(Node* targetQname, const Node* owner, const Node* rede
                    "Redefining '%s' with type '%s' is incompatible with redefined type '%s'.",
                    nameBuf, redefBuf, targetBuf);
     }
+
+    /* Modifier preservation — a `constant` feature stays constant.
+     * Loosening this would let a subtype write to a value the parent
+     * declared immutable, which violates the substitution principle.
+     *
+     * `derived` is intentionally NOT preserved: a subtype is allowed
+     * to override a derived (computed) feature with a stored value
+     * that fixes the derivation, and vice versa.  Only `constant`
+     * carries a hard preservation rule. */
+    if (redefiningAttr->kind == NODE_ATTRIBUTE && found->kind == NODE_ATTRIBUTE) {
+        if (found->as.attribute.isConstant && !redefiningAttr->as.attribute.isConstant) {
+            redefError(redefiningAttr->line,
+                       "Redefining 'constant' attribute '%s' must also be 'constant'.",
+                       nameBuf);
+        }
+    }
 }
 
 /* Iterate an attribute's redefines list, checking each entry. */

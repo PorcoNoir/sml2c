@@ -335,6 +335,7 @@ Token scanToken(void) {
         return makeToken(TOKEN_COLON);
     case '=': return makeToken(match('=') ? TOKEN_EQUAL_EQUAL   : TOKEN_EQUAL);
     case '!': return makeToken(match('=') ? TOKEN_BANG_EQUAL    : TOKEN_BANG);
+    case '~': return makeToken(TOKEN_TILDE);
     case '<': return makeToken(match('=') ? TOKEN_LESS_EQUAL    : TOKEN_LESS);
     case '>': return makeToken(match('=') ? TOKEN_GREATER_EQUAL : TOKEN_GREATER);
     case '"': return string();
@@ -362,6 +363,7 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_STAR:           return "STAR";
     case TOKEN_SLASH:          return "SLASH";
     case TOKEN_BANG:           return "BANG";
+    case TOKEN_TILDE:          return "TILDE";
     case TOKEN_COLON:          return "COLON";
     case TOKEN_COLON_COLON:    return "COLON_COLON";
     case TOKEN_COLON_GREATER:        return "COLON_GREATER";

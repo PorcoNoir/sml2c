@@ -21,6 +21,7 @@
           "defKind": "ItemDef",
           "name": "Signal",
           "visibility": "default",
+          "isAbstract": false,
           "specializes": [],
           "redefines": [],
           "members": [
@@ -28,6 +29,10 @@
               "kind": "Attribute",
               "name": "strength",
               "visibility": "default",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -47,6 +52,7 @@
           "defKind": "InterfaceDef",
           "name": "Bus",
           "visibility": "default",
+          "isAbstract": false,
           "specializes": [
             {
               "kind": "QualifiedName",
@@ -67,6 +73,7 @@
           "defKind": "ConnectionDef",
           "name": "Wire",
           "visibility": "default",
+          "isAbstract": false,
           "specializes": [
             {
               "kind": "QualifiedName",
@@ -82,6 +89,10 @@
               "name": "source",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -93,6 +104,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -101,6 +113,10 @@
               "name": "target",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -117,6 +133,7 @@
                 "upper": "*"
               },
               "ends": [],
+              "default": null,
               "members": []
             }
           ]
@@ -126,6 +143,7 @@
           "defKind": "FlowDef",
           "name": "DataFlow",
           "visibility": "default",
+          "isAbstract": false,
           "specializes": [],
           "redefines": [],
           "members": [
@@ -135,6 +153,10 @@
               "name": "producer",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -146,6 +168,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -154,6 +177,10 @@
               "name": "consumer",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -165,6 +192,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             }
           ]
@@ -174,6 +202,7 @@
           "defKind": "PartDef",
           "name": "Sensor",
           "visibility": "default",
+          "isAbstract": false,
           "specializes": [],
           "redefines": [],
           "members": [
@@ -183,6 +212,10 @@
               "name": "reading",
               "visibility": "default",
               "direction": "out",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -194,6 +227,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -202,6 +236,10 @@
               "name": "command",
               "visibility": "default",
               "direction": "in",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -213,6 +251,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -221,6 +260,10 @@
               "name": "bidir",
               "visibility": "default",
               "direction": "inout",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -232,6 +275,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             }
           ]
@@ -241,6 +285,7 @@
           "defKind": "PartDef",
           "name": "Logger",
           "visibility": "default",
+          "isAbstract": false,
           "specializes": [],
           "redefines": [],
           "members": [
@@ -250,6 +295,10 @@
               "name": "input",
               "visibility": "default",
               "direction": "in",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -261,6 +310,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -269,6 +319,10 @@
               "name": "bidir",
               "visibility": "default",
               "direction": "inout",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -280,6 +334,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             }
           ]
@@ -290,6 +345,10 @@
           "name": "system",
           "visibility": "default",
           "direction": "none",
+          "isDerived": false,
+          "isAbstract": false,
+          "isConstant": false,
+          "isReference": true,
           "types": [
             {
               "kind": "QualifiedName",
@@ -301,6 +360,7 @@
           "redefines": [],
           "multiplicity": null,
           "ends": [],
+          "default": null,
           "members": [
             {
               "kind": "Usage",
@@ -308,6 +368,10 @@
               "name": "s",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -319,6 +383,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -327,6 +392,10 @@
               "name": "l",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -338,6 +407,7 @@
               "redefines": [],
               "multiplicity": null,
               "ends": [],
+              "default": null,
               "members": []
             },
             {
@@ -346,6 +416,10 @@
               "name": null,
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [],
               "specializes": [],
               "redefines": [],
@@ -362,6 +436,7 @@
                   "resolvedTo": "input"
                 }
               ],
+              "default": null,
               "members": []
             },
             {
@@ -370,6 +445,10 @@
               "name": "c1",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -392,6 +471,7 @@
                   "resolvedTo": "input"
                 }
               ],
+              "default": null,
               "members": []
             },
             {
@@ -400,6 +480,10 @@
               "name": null,
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [],
               "specializes": [],
               "redefines": [],
@@ -416,6 +500,7 @@
                   "resolvedTo": "input"
                 }
               ],
+              "default": null,
               "members": []
             },
             {
@@ -424,6 +509,10 @@
               "name": "signalFlow",
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [
                 {
                   "kind": "QualifiedName",
@@ -446,6 +535,7 @@
                   "resolvedTo": "input"
                 }
               ],
+              "default": null,
               "members": []
             },
             {
@@ -454,6 +544,10 @@
               "name": null,
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [],
               "specializes": [],
               "redefines": [],
@@ -470,6 +564,7 @@
                   "resolvedTo": "bidir"
                 }
               ],
+              "default": null,
               "members": []
             },
             {
@@ -478,6 +573,10 @@
               "name": null,
               "visibility": "default",
               "direction": "none",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": false,
               "types": [],
               "specializes": [],
               "redefines": [],
@@ -494,12 +593,17 @@
                   "resolvedTo": "bidir"
                 }
               ],
+              "default": null,
               "members": []
             },
             {
               "kind": "Attribute",
               "name": "everything",
               "visibility": "default",
+              "isDerived": false,
+              "isAbstract": false,
+              "isConstant": false,
+              "isReference": true,
               "types": [
                 {
                   "kind": "QualifiedName",

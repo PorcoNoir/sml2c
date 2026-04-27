@@ -90,6 +90,16 @@ static const char* dirStr(Direction d) {
     return "?";
 }
 
+/* Flip a direction under conjugation: in↔out, inout stays inout
+ * (because both halves are intrinsic), none stays none.            */
+static Direction flipDirection(Direction d) {
+    switch (d) {
+    case DIR_IN:  return DIR_OUT;
+    case DIR_OUT: return DIR_IN;
+    default:      return d;
+    }
+}
+
 /* What role does this end play? */
 typedef enum {
     END_CONNECT,        /* `connect a to b` — no direction constraint   */
@@ -118,6 +128,12 @@ static void checkEnd(const Node* endRef, EndRole role) {
     if (resolved->kind != NODE_USAGE || resolved->as.usage.defKind != DEF_PORT) return;
 
     Direction d = resolved->as.usage.direction;
+    /* If the qname's resolution path crossed an odd number of
+     * conjugated type references (`~Sensor` somewhere in the chain),
+     * flip the effective direction.  Set by the resolver in
+     * qname.conjugationParity.                                     */
+    if (endRef->as.qualifiedName.conjugationParity) d = flipDirection(d);
+
     if (role == END_FLOW_FROM && d != DIR_OUT && d != DIR_INOUT) {
         connectionError(endRef->line,
                         "Flow source port must be 'out' or 'inout'; got '%s'.",

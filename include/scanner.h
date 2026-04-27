@@ -22,6 +22,7 @@ typedef enum {
     TOKEN_PLUS, TOKEN_MINUS,                       /* + - */
     TOKEN_STAR, TOKEN_SLASH,                       /* * / */
     TOKEN_BANG,                                    /* ! */
+    TOKEN_TILDE,                                   /* ~     port conjugation */
 
     /* Tokens that may be one, two, or three characters --------------- */
     TOKEN_COLON, TOKEN_COLON_COLON,                /* : ::   */

@@ -216,6 +216,7 @@ static void emitQualifiedName(J* j, const Node* q) {
     bool first = true;
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "QualifiedName");
+    sep(j, &first); emitFieldBool(j, "isConjugated", q->as.qualifiedName.isConjugated);
     sep(j, &first); emitKey(j, "parts"); fputc('[', j->out);
     for (int i = 0; i < q->as.qualifiedName.partCount; i++) {
         if (i > 0) fputs(", ", j->out);

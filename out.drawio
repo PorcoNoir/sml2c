@@ -1,0 +1,13 @@
+<mxfile host="Drawpyo" modified="2026-04-27T19:48:06" agent="Python 3.12, Drawpyo 0.23" version="21.6.5" type="device">
+  <diagram name="Page-1" id="4419996464">
+    <mxGraphModel dx="2037" dy="830" grid="1" gridSize="10" guides="1" toolTips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="4432950912" value="&lt;div&gt;&amp;lt;&amp;lt;package&amp;gt;&amp;gt;&lt;/div&gt;&lt;div&gt;&lt;b&gt;ConnectionsDemo&lt;/b&gt;&lt;/div&gt;&lt;div&gt;(0 elements)&lt;/div&gt;" style="swimlane;whiteSpace=wrap;rounded=1;dashed=0;fontStyle=1;align=center;verticalAlign=top;arcSize=5;collapsible=1;marginBottom=0;html=1;fontFamily=Overpass;fontSize=11;" vertex="1" parent="1">
+  <mxGeometry x="40" y="40" width="800" height="60" as="geometry" />
+</mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

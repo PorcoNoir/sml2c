@@ -85,6 +85,7 @@ static void emitToken(Token t) {
 }
 
 static void emitQualifiedName(const Node* q) {
+    if (q->as.qualifiedName.isConjugated) printf("~");
     for (int i = 0; i < q->as.qualifiedName.partCount; i++) {
         if (i > 0) printf("::");
         emitToken(q->as.qualifiedName.parts[i]);
@@ -143,13 +144,15 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "ItemDef", "ConnectionDef", "FlowDef",
         "?EndDef",  /* ends have no def form; sentinel for misuse  */
         "DataTypeDef",
-        "EnumDef"
+        "EnumDef",
+        "?ReferenceDef" /* references have no def form              */
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
         "Item", "Connection", "Flow", "End",
         "DataType",  /* not produced by the parser, used by stdlib  */
-        "EnumValue"
+        "EnumValue",
+        "Reference"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -279,6 +282,10 @@ static void printNode(const Node* n, int depth) {
         emitNameList(" :>> ", &n->as.usage.redefines);
         emitMultiplicity(n->as.usage.multiplicity);
         emitEnds(n->as.usage.defKind, &n->as.usage.ends);
+        if (n->as.usage.defaultValue) {
+            printf(" = ");
+            emitExpression(n->as.usage.defaultValue);
+        }
         printf("\n");
         for (int i = 0; i < n->as.usage.memberCount; i++)
             printNode(n->as.usage.members[i], depth + 1);

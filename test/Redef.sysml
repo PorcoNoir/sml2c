@@ -21,8 +21,9 @@ package RedefDemo {
         attribute speed :>> speed;
     }
 
-    // Multi-segment redef target: silently accepted (deferred to a later
-    // pass; member-of-type resolution isn't implemented yet).
+    // Multi-segment redef target.  Resolver pre-resolves it via
+    // lookupMember; the redef checker then validates type compatibility
+    // (Integer specializes Real, so this narrows correctly).
     part def Bus :> Vehicle {
         attribute speed :>> Vehicle::speed : Integer;
     }
