@@ -1,8 +1,8 @@
-/* sml2c — main.c
+/* sysmlc — main.c
  *
- *   ./sml2c                       parse built-in sample, print AST
- *   ./sml2c file.sysml            parse file, print AST
- *   ./sml2c --tokens [file]       just dump the token stream (old behavior)
+ *   ./sysmlc                       parse built-in sample, print AST
+ *   ./sysmlc file.sysml            parse file, print AST
+ *   ./sysmlc --tokens [file]       just dump the token stream (old behavior)
  */
 #include <stdio.h>
 #include <stdlib.h>

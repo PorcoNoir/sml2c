@@ -1,6 +1,6 @@
-/* sml2c — parser.h */
-#ifndef SML2C_PARSER_H
-#define SML2C_PARSER_H
+/* sysmlc — parser.h */
+#ifndef SYSMLC_PARSER_H
+#define SYSMLC_PARSER_H
 
 #include <stdbool.h>
 #include "ast.h"
@@ -12,4 +12,4 @@
 Node* parse(void);
 bool  parserHadError(void);
 
-#endif /* SML2C_PARSER_H */
+#endif /* SYSMLC_PARSER_H */

@@ -1,4 +1,4 @@
-/* sml2c — scanner.c */
+/* sysmlc — scanner.c */
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
@@ -118,9 +118,11 @@ static TokenType identifierType(void) {
     KW("part",      TOKEN_PART);
     KW("def",       TOKEN_DEF);
     KW("attribute", TOKEN_ATTRIBUTE);
-    KW("ref",       TOKEN_REF);
-    KW("true",      TOKEN_TRUE);
-    KW("false",     TOKEN_FALSE);
+    KW("ref",         TOKEN_REF);
+    KW("specializes", TOKEN_SPECIALIZES);
+    KW("redefines",   TOKEN_REDEFINES);
+    KW("true",        TOKEN_TRUE);
+    KW("false",       TOKEN_FALSE);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -193,7 +195,13 @@ Token scanToken(void) {
     case '-': return makeToken(TOKEN_MINUS);
     case '*': return makeToken(TOKEN_STAR);
     case '/': return makeToken(TOKEN_SLASH);   /* comments handled above */
-    case ':': return makeToken(match(':') ? TOKEN_COLON_COLON   : TOKEN_COLON);
+    case ':':
+        if (match(':')) return makeToken(TOKEN_COLON_COLON);
+        if (match('>')) {
+            if (match('>')) return makeToken(TOKEN_COLON_GREATER_GREATER);
+            return makeToken(TOKEN_COLON_GREATER);
+        }
+        return makeToken(TOKEN_COLON);
     case '=': return makeToken(match('=') ? TOKEN_EQUAL_EQUAL   : TOKEN_EQUAL);
     case '!': return makeToken(match('=') ? TOKEN_BANG_EQUAL    : TOKEN_BANG);
     case '<': return makeToken(match('=') ? TOKEN_LESS_EQUAL    : TOKEN_LESS);
@@ -224,6 +232,8 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_BANG:           return "BANG";
     case TOKEN_COLON:          return "COLON";
     case TOKEN_COLON_COLON:    return "COLON_COLON";
+    case TOKEN_COLON_GREATER:        return "COLON_GREATER";
+    case TOKEN_COLON_GREATER_GREATER:return "COLON_GREATER_GREATER";
     case TOKEN_EQUAL:          return "EQUAL";
     case TOKEN_EQUAL_EQUAL:    return "EQUAL_EQUAL";
     case TOKEN_BANG_EQUAL:     return "BANG_EQUAL";
@@ -240,6 +250,8 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_DEF:            return "DEF";
     case TOKEN_ATTRIBUTE:      return "ATTRIBUTE";
     case TOKEN_REF:            return "REF";
+    case TOKEN_SPECIALIZES:    return "SPECIALIZES";
+    case TOKEN_REDEFINES:      return "REDEFINES";
     case TOKEN_TRUE:           return "TRUE";
     case TOKEN_FALSE:          return "FALSE";
     case TOKEN_ERROR:          return "ERROR";

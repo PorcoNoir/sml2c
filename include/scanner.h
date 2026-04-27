@@ -1,4 +1,4 @@
-/* sml2c — scanner.h
+/* sysmlc — scanner.h
  *
  * Lexical analyzer for a subset of SysML v2 (.sysml files).
  *
@@ -10,8 +10,8 @@
  * v0.1 token set: enough for `package`, `import`, `part def`, `part`,
  * `attribute`, plus the literals/operators we'll need for expressions later.
  */
-#ifndef SML2C_SCANNER_H
-#define SML2C_SCANNER_H
+#ifndef SYSMLC_SCANNER_H
+#define SYSMLC_SCANNER_H
 
 typedef enum {
     /* Single-character punctuation ----------------------------------- */
@@ -23,8 +23,10 @@ typedef enum {
     TOKEN_STAR, TOKEN_SLASH,                       /* * / */
     TOKEN_BANG,                                    /* ! */
 
-    /* Tokens that may be one or two characters ----------------------- */
-    TOKEN_COLON, TOKEN_COLON_COLON,                /* : :: */
+    /* Tokens that may be one, two, or three characters --------------- */
+    TOKEN_COLON, TOKEN_COLON_COLON,                /* : ::   */
+    TOKEN_COLON_GREATER,                           /* :>     specializes */
+    TOKEN_COLON_GREATER_GREATER,                   /* :>>    redefines   */
     TOKEN_EQUAL, TOKEN_EQUAL_EQUAL,                /* = == */
     TOKEN_BANG_EQUAL,                              /* != */
     TOKEN_LESS, TOKEN_LESS_EQUAL,                  /* < <= */
@@ -42,6 +44,8 @@ typedef enum {
     TOKEN_DEF,
     TOKEN_ATTRIBUTE,
     TOKEN_REF,
+    TOKEN_SPECIALIZES,
+    TOKEN_REDEFINES,
     TOKEN_TRUE, TOKEN_FALSE,
 
     /* Special -------------------------------------------------------- */
@@ -63,4 +67,4 @@ Token scanToken(void);
 /* Pretty name for debugging / test harness. */
 const char* tokenTypeName(TokenType type);
 
-#endif /* SML2C_SCANNER_H */
+#endif /* SYSMLC_SCANNER_H */

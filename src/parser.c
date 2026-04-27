@@ -1,4 +1,4 @@
-/* sml2c — parser.c
+/* sysmlc — parser.c
  *
  * Hand-written recursive-descent parser, one function per grammar rule.
  * State is one current token + one previous token — same shape as
@@ -95,6 +95,44 @@ static void synchronize(void) {
 static Node* declaration(void);
 static Node* qualifiedName(void);
 
+/* -------------------------------------- feature relationships helper
+ *
+ * Many SysML feature-bearing constructs (attributes, part usages,
+ * part defs) can carry an optional combination of:
+ *
+ *      ':'  qualifiedName            (typing)
+ *      ':>'  / 'specializes' qname   (subsetting / specialization)
+ *      ':>>' / 'redefines'   qname   (redefinition)
+ *
+ * The clauses can appear in any order, but each at most once.  This
+ * helper consumes whatever clauses are present, fills in the FeatureRels
+ * struct, and returns when the next token isn't a relationship opener.
+ */
+typedef struct {
+    Node* type;
+    Node* specializes;
+    Node* redefines;
+} FeatureRels;
+
+static FeatureRels parseFeatureRelationships(void) {
+    FeatureRels r = { NULL, NULL, NULL };
+    for (;;) {
+        if (match(TOKEN_COLON)) {
+            if (r.type) error("Duplicate type clause.");
+            r.type = qualifiedName();
+        } else if (match(TOKEN_COLON_GREATER) || match(TOKEN_SPECIALIZES)) {
+            if (r.specializes) error("Duplicate 'specializes' clause.");
+            r.specializes = qualifiedName();
+        } else if (match(TOKEN_COLON_GREATER_GREATER) || match(TOKEN_REDEFINES)) {
+            if (r.redefines) error("Duplicate 'redefines' clause.");
+            r.redefines = qualifiedName();
+        } else {
+            break;
+        }
+    }
+    return r;
+}
+
 /* ============================================== grammar functions */
 
 /*  qualifiedName ::= IDENTIFIER ( "::" IDENTIFIER )*  */
@@ -158,34 +196,47 @@ static Node* importDecl(void) {
     return imp;
 }
 
-/*  attributeDecl ::= "attribute" IDENTIFIER ( ":" qualifiedName )? ";"  */
+/*  attributeDecl ::= "attribute" IDENTIFIER featureRelationships? ";"
+ *
+ *  featureRelationships ::= ( ":" qname | (":>"|"specializes") qname
+ *                                       | (":>>"|"redefines")  qname )+
+ */
 static Node* attributeDecl(void) {
     int line = parser.previous.line;            /* 'attribute' just consumed */
     consume(TOKEN_IDENTIFIER, "Expected attribute name.");
     Token name = parser.previous;
 
-    Node* type = NULL;
-    if (match(TOKEN_COLON)) type = qualifiedName();
+    FeatureRels rels = parseFeatureRelationships();
 
     consume(TOKEN_SEMICOLON, "Expected ';' after attribute.");
 
     Node* a = astMakeNode(NODE_ATTRIBUTE, line);
-    a->as.attribute.name = name;
-    a->as.attribute.type = type;
+    a->as.attribute.name        = name;
+    a->as.attribute.type        = rels.type;
+    a->as.attribute.specializes = rels.specializes;
+    a->as.attribute.redefines   = rels.redefines;
     return a;
 }
 
-/*  partDef ::= "def" IDENTIFIER "{" declaration* "}"
- *  Caller has already consumed "part".                                */
+/*  partDef ::= "def" IDENTIFIER featureRelationships? "{" declaration* "}"
+ *  Caller has already consumed "part".  Note that `:` (typing) is not
+ *  meaningful for a definition, but we accept it here and let later
+ *  semantic analysis reject it; the parser stays simple.            */
 static Node* partDef(void) {
     int line = parser.previous.line;            /* 'part' just consumed */
     advance();                                  /* eat 'def'          */
     consume(TOKEN_IDENTIFIER, "Expected part definition name.");
     Token name = parser.previous;
+
+    FeatureRels rels = parseFeatureRelationships();
+
     consume(TOKEN_LEFT_BRACE, "Expected '{' after part definition name.");
 
     Node* def = astMakeNode(NODE_PART_DEF, line);
-    def->as.scope.name = name;
+    def->as.scope.name        = name;
+    def->as.scope.specializes = rels.specializes;
+    def->as.scope.redefines   = rels.redefines;
+    /* rels.type is silently dropped for part def — semantic check will warn. */
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         Node* m = declaration();
@@ -196,19 +247,20 @@ static Node* partDef(void) {
     return def;
 }
 
-/*  partUsage ::= IDENTIFIER ( ":" qualifiedName )? ( "{" declaration* "}" | ";" )
+/*  partUsage ::= IDENTIFIER featureRelationships? ( "{" declaration* "}" | ";" )
  *  Caller has already consumed "part".                                */
 static Node* partUsage(void) {
     int line = parser.previous.line;            /* 'part' just consumed */
     consume(TOKEN_IDENTIFIER, "Expected part name.");
     Token name = parser.previous;
 
-    Node* type = NULL;
-    if (match(TOKEN_COLON)) type = qualifiedName();
+    FeatureRels rels = parseFeatureRelationships();
 
     Node* u = astMakeNode(NODE_PART_USAGE, line);
-    u->as.usage.name = name;
-    u->as.usage.type = type;
+    u->as.usage.name        = name;
+    u->as.usage.type        = rels.type;
+    u->as.usage.specializes = rels.specializes;
+    u->as.usage.redefines   = rels.redefines;
 
     if (match(TOKEN_LEFT_BRACE)) {
         while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
