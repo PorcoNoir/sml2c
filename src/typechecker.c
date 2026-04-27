@@ -94,8 +94,12 @@ static bool specializesDepth(const Node* a, const Node* b, int depth) {
     return false;
 }
 
-static bool specializes(const Node* a, const Node* b) {
+bool specializesType(const Node* a, const Node* b) {
     return specializesDepth(a, b, 0);
+}
+
+static bool specializes(const Node* a, const Node* b) {
+    return specializesType(a, b);
 }
 
 static bool isNumeric(const Node* t) {

@@ -304,10 +304,12 @@ static void resolveNode(Node* n, Scope* current) {
     }
 
     case NODE_DEFINITION: {
-        /* Spec/redef references look up in the OUTER scope — they
-         * point to other top-level names, not to anything inside us. */
+        /* Specializes points at other top-level names — outer scope. */
         resolveNodeList(&n->as.scope.specializes, current);
-        resolveNodeList(&n->as.scope.redefines,   current);
+        /* Redefines is intentionally NOT resolved here.  Its semantics
+         * are "the same-named feature in some supertype," which the
+         * dedicated redefinition pass handles by walking specializes
+         * transitively.  Local-scope lookup would self-resolve. */
 
         Scope inner = { .parent = current, .what = "definition" };
         resolveScopeBody(&inner, n->as.scope.members, n->as.scope.memberCount);
@@ -316,10 +318,10 @@ static void resolveNode(Node* n, Scope* current) {
     }
 
     case NODE_USAGE: {
-        /* Type, spec, redef, and endpoint refs resolve in OUTER scope. */
+        /* Type, spec, and endpoint refs resolve in OUTER scope.
+         * Redefines is left for the redefinition pass. */
         resolveNodeList(&n->as.usage.types,       current);
         resolveNodeList(&n->as.usage.specializes, current);
-        resolveNodeList(&n->as.usage.redefines,   current);
         resolveNodeList(&n->as.usage.ends,        current);
 
         if (n->as.usage.memberCount > 0) {
@@ -334,7 +336,7 @@ static void resolveNode(Node* n, Scope* current) {
     case NODE_ATTRIBUTE:
         resolveNodeList(&n->as.attribute.types,       current);
         resolveNodeList(&n->as.attribute.specializes, current);
-        resolveNodeList(&n->as.attribute.redefines,   current);
+        /* Redefines: see comment in NODE_DEFINITION case. */
         resolveExpression(n->as.attribute.defaultValue, current);
         break;
 

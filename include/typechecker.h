@@ -32,4 +32,12 @@
 
 bool typecheckProgram(const Node* program);
 
+/* Public utility: does type `a` specialize type `b` (transitively),
+ * including the reflexive case a == b?  Both must be NODE_DEFINITION
+ * pointers (or NULL, in which case the relation is false).  Walks
+ * the resolved specializes chain with a depth bound to defang
+ * accidental cycles.  Other passes (notably the redefinition
+ * checker) reuse this to query subtype relations. */
+bool specializesType(const Node* a, const Node* b);
+
 #endif /* SYSMLC_TYPECHECKER_H */
