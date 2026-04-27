@@ -96,6 +96,8 @@ static const char* defKindStr(DefKind k) {
     case DEF_FLOW:       return "FlowDef";
     case DEF_END:        return "End";
     case DEF_DATATYPE:   return "DataTypeDef";
+    case DEF_ENUM:       return "EnumDef";
+    case DEF_REFERENCE:  return "ReferenceUsage";
     }
     return "?";
 }
@@ -316,6 +318,10 @@ static void emitAttribute(J* j, const Node* n) {
     sep(j, &first); emitFieldStr(j, "kind", "Attribute");
     sep(j, &first); emitKey(j, "name"); emitToken(j, n->as.attribute.name);
     sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.attribute.visibility));
+    sep(j, &first); emitFieldBool(j, "isDerived",   n->as.attribute.isDerived);
+    sep(j, &first); emitFieldBool(j, "isAbstract",  n->as.attribute.isAbstract);
+    sep(j, &first); emitFieldBool(j, "isConstant",  n->as.attribute.isConstant);
+    sep(j, &first); emitFieldBool(j, "isReference", n->as.attribute.isReference);
     sep(j, &first); emitKey(j, "types");        emitNodeList(j, &n->as.attribute.types);
     sep(j, &first); emitKey(j, "specializes");  emitNodeList(j, &n->as.attribute.specializes);
     sep(j, &first); emitKey(j, "redefines");    emitNodeList(j, &n->as.attribute.redefines);
@@ -332,7 +338,8 @@ static void emitDefinition(J* j, const Node* n) {
     sep(j, &first); emitFieldStr(j, "kind", "Definition");
     sep(j, &first); emitFieldStr(j, "defKind", defKindStr(n->as.scope.defKind));
     sep(j, &first); emitKey(j, "name"); emitToken(j, n->as.scope.name);
-    sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.scope.visibility));
+    sep(j, &first); emitFieldStr (j, "visibility", visStr(n->as.scope.visibility));
+    sep(j, &first); emitFieldBool(j, "isAbstract", n->as.scope.isAbstract);
     sep(j, &first); emitKey(j, "specializes"); emitNodeList(j, &n->as.scope.specializes);
     sep(j, &first); emitKey(j, "redefines");   emitNodeList(j, &n->as.scope.redefines);
     sep(j, &first); emitKey(j, "members");
@@ -348,13 +355,20 @@ static void emitUsage(J* j, const Node* n) {
     sep(j, &first); emitKey(j, "name");
     if (n->as.usage.name.length > 0) emitToken(j, n->as.usage.name);
     else                             fputs("null", j->out);
-    sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.usage.visibility));
-    sep(j, &first); emitFieldStr(j, "direction",  dirStr(n->as.usage.direction));
+    sep(j, &first); emitFieldStr (j, "visibility", visStr(n->as.usage.visibility));
+    sep(j, &first); emitFieldStr (j, "direction",  dirStr(n->as.usage.direction));
+    sep(j, &first); emitFieldBool(j, "isDerived",   n->as.usage.isDerived);
+    sep(j, &first); emitFieldBool(j, "isAbstract",  n->as.usage.isAbstract);
+    sep(j, &first); emitFieldBool(j, "isConstant",  n->as.usage.isConstant);
+    sep(j, &first); emitFieldBool(j, "isReference", n->as.usage.isReference);
     sep(j, &first); emitKey(j, "types");        emitNodeList(j, &n->as.usage.types);
     sep(j, &first); emitKey(j, "specializes");  emitNodeList(j, &n->as.usage.specializes);
     sep(j, &first); emitKey(j, "redefines");    emitNodeList(j, &n->as.usage.redefines);
     sep(j, &first); emitKey(j, "multiplicity"); emitMultiplicityNode(j, n->as.usage.multiplicity);
     sep(j, &first); emitKey(j, "ends");         emitNodeList(j, &n->as.usage.ends);
+    sep(j, &first); emitKey(j, "default");
+    if (n->as.usage.defaultValue) emitNode(j, n->as.usage.defaultValue);
+    else                          fputs("null", j->out);
     sep(j, &first); emitKey(j, "members");
     emitNodeArray(j, n->as.usage.members, n->as.usage.memberCount);
     j->indent--; newline(j); fputc('}', j->out);
@@ -380,6 +394,50 @@ static void emitProgram(J* j, const Node* n) {
     j->indent--; newline(j); fputc('}', j->out);
 }
 
+static void emitAlias(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Alias");
+    sep(j, &first); emitKey(j, "name"); emitToken(j, n->as.alias.name);
+    sep(j, &first); emitKey(j, "target");
+    if (n->as.alias.target) emitNode(j, n->as.alias.target);
+    else                    fputs("null", j->out);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
+static void emitComment(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Comment");
+    sep(j, &first); emitKey(j, "name");
+    if (n->as.comment.name.length > 0) emitToken(j, n->as.comment.name);
+    else                                fputs("null", j->out);
+    sep(j, &first); emitKey(j, "about"); emitNodeList(j, &n->as.comment.about);
+    /* Body: trim leading whitespace for cleaner output. */
+    {
+        const char* s = n->as.comment.body.start;
+        int len = n->as.comment.body.length;
+        while (len > 0 && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')) {
+            s++; len--;
+        }
+        sep(j, &first); emitKey(j, "body"); emitJsonString(j, s, len);
+    }
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
+static void emitDependency(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Dependency");
+    sep(j, &first); emitKey(j, "name");
+    if (n->as.dependency.name.length > 0) emitToken(j, n->as.dependency.name);
+    else                                   fputs("null", j->out);
+    sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.dependency.visibility));
+    sep(j, &first); emitKey(j, "sources"); emitNodeList(j, &n->as.dependency.sources);
+    sep(j, &first); emitKey(j, "targets"); emitNodeList(j, &n->as.dependency.targets);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
 /* Dispatcher. */
 static void emitNode(J* j, const Node* n) {
     if (!n) { fputs("null", j->out); return; }
@@ -396,6 +454,9 @@ static void emitNode(J* j, const Node* n) {
     case NODE_LITERAL:        emitLiteral      (j, n); break;
     case NODE_BINARY:         emitBinary       (j, n); break;
     case NODE_UNARY:          emitUnary        (j, n); break;
+    case NODE_ALIAS:          emitAlias        (j, n); break;
+    case NODE_COMMENT:        emitComment      (j, n); break;
+    case NODE_DEPENDENCY:     emitDependency   (j, n); break;
     }
 }
 

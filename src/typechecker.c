@@ -252,8 +252,27 @@ static const Node* typeOf(const Node* expr) {
 
 /* ---- attribute default-value check ----------------------------- */
 
-static void checkAttribute(const Node* attr) {
-    if (!attr->as.attribute.defaultValue) return;
+static void checkAttribute(const Node* attr, bool insideEnumDef) {
+    /* Modifier semantics: `constant` features must carry a value (the
+     * fixed value they're constant at), and `derived` features must
+     * carry an expression (the rule by which they're derived).  Both
+     * are flagged here even if the rest of the check would skip due
+     * to missing default — these rules apply unconditionally.       */
+    if (!attr->as.attribute.defaultValue) {
+        if (attr->as.attribute.isConstant) {
+            typeError(attr->line,
+                      "'constant' attribute '%.*s' must have a value.",
+                      attr->as.attribute.name.length,
+                      attr->as.attribute.name.start);
+        }
+        if (attr->as.attribute.isDerived) {
+            typeError(attr->line,
+                      "'derived' attribute '%.*s' must have a derivation expression.",
+                      attr->as.attribute.name.length,
+                      attr->as.attribute.name.start);
+        }
+        return;
+    }
 
     /* Compute the expression's type — sub-expression checks fire
      * along the way as a side effect. */
@@ -272,6 +291,20 @@ static void checkAttribute(const Node* attr) {
      * the typechecker permissive for tentatively-accepted names. */
     if (!declType || !valType) return;
 
+    /* Inside an `enum def`, the value-attribute initializers are
+     * tags (Integer/String codes), not values of the enum's type.
+     * The parser stamps the enum def as the value's declared type
+     * for resolution and member lookup; we relax the compatibility
+     * rule here so the literal tag is accepted.  This relaxation
+     * only applies to attributes declared INSIDE an enum def — a
+     * user-written `attribute hue : Color = 3.14` outside one is
+     * still an error.                                                */
+    if (insideEnumDef
+        && declType->kind == NODE_DEFINITION
+        && declType->as.scope.defKind == DEF_ENUM) {
+        return;
+    }
+
     if (!specializes(valType, declType)) {
         typeError(attr->line,
                   "Default value of type '%s' cannot initialize attribute '%.*s' of type '%s'.",
@@ -284,23 +317,29 @@ static void checkAttribute(const Node* attr) {
 
 /* ---- whole-program walker -------------------------------------- */
 
-static void walk(const Node* n) {
+static void walk(const Node* n, bool insideEnumDef) {
     if (!n) return;
     switch (n->kind) {
     case NODE_PROGRAM:
     case NODE_PACKAGE:
-    case NODE_DEFINITION:
         for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i]);
+            walk(n->as.scope.members[i], false);
         }
         break;
+    case NODE_DEFINITION: {
+        bool childContext = (n->as.scope.defKind == DEF_ENUM);
+        for (int i = 0; i < n->as.scope.memberCount; i++) {
+            walk(n->as.scope.members[i], childContext);
+        }
+        break;
+    }
     case NODE_USAGE:
         for (int i = 0; i < n->as.usage.memberCount; i++) {
-            walk(n->as.usage.members[i]);
+            walk(n->as.usage.members[i], false);
         }
         break;
     case NODE_ATTRIBUTE:
-        checkAttribute(n);
+        checkAttribute(n, insideEnumDef);
         break;
     default:
         break;
@@ -312,7 +351,7 @@ static void walk(const Node* n) {
 bool typecheckProgram(const Node* program) {
     errorCount = 0;
     initStdlibCache();
-    walk(program);
+    walk(program, false);
     if (errorCount > 0) {
         fprintf(stderr, "Type checking failed with %d error%s.\n",
                 errorCount, errorCount == 1 ? "" : "s");

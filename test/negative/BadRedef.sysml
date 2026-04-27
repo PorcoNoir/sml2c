@@ -19,4 +19,11 @@ package BadRedef {
     part def Standalone {
         attribute pace :>> pace : Real;
     }
+
+    // Error: multi-segment redef with type widening — String doesn't
+    // specialize Real. Now caught because qualifier validation enables
+    // the type-compat check for n<=2 paths.
+    part def Truck :> Vehicle {
+        attribute speed :>> Vehicle::speed : String;
+    }
 }

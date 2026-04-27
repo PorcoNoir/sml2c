@@ -10,14 +10,27 @@ typedef struct {
     const char* start;    /* start of the token currently being scanned   */
     const char* current;  /* next character to consume                    */
     int         line;     /* current source line                          */
+    /* One-slot rolling save of the most-recently-skipped block
+     * comment body.  skipWhitespace clears this on entry and writes it
+     * when a block is consumed.  takeLastBlockComment() returns and
+     * clears it.  The parser uses this to recover bodies that the
+     * scanner ate before commentDecl could ask for them. */
+    Token       lastBlock;
 } Scanner;
 
 static Scanner scanner;
 
 void initScanner(const char* source) {
-    scanner.start   = source;
-    scanner.current = source;
-    scanner.line    = 1;
+    scanner.start     = source;
+    scanner.current   = source;
+    scanner.line      = 1;
+    scanner.lastBlock = (Token){0};
+}
+
+Token takeLastBlockComment(void) {
+    Token t = scanner.lastBlock;
+    scanner.lastBlock = (Token){0};
+    return t;
 }
 
 /* ---------------------------------------------------------- low-level IO */
@@ -69,6 +82,11 @@ static Token errorToken(const char* msg) {
  * comment.
  */
 static void skipWhitespace(void) {
+    /* Each scanToken() begins with one skipWhitespace() pass, so it's
+     * the right place to reset the rolling block-comment save: anything
+     * earlier than this pass is no longer adjacent to the next token. */
+    scanner.lastBlock = (Token){0};
+
     for (;;) {
         char c = peek();
         switch (c) {
@@ -90,15 +108,26 @@ static void skipWhitespace(void) {
                 if (scanner.current[2] == '*' && scanner.current[3] != '/') {
                     return;                     /* leave for scanToken to capture */
                 }
+                int blockLine = scanner.line;
                 advance(); advance();           /* consume "/" "*" */
+                const char* bodyStart = scanner.current;
+                const char* bodyEnd   = bodyStart;
                 while (!isAtEnd()) {
                     if (peek() == '*' && peekNext() == '/') {
+                        bodyEnd = scanner.current;
                         advance(); advance();   /* consume "*" "/" */
                         break;
                     }
                     if (peek() == '\n') scanner.line++;
                     advance();
                 }
+                /* Save the body content (without delimiters) into the
+                 * rolling slot.  Last block in the run wins, which is
+                 * what commentDecl wants. */
+                scanner.lastBlock.type   = TOKEN_DOC_BODY;
+                scanner.lastBlock.start  = bodyStart;
+                scanner.lastBlock.length = (int)(bodyEnd - bodyStart);
+                scanner.lastBlock.line   = blockLine;
             } else {
                 return;                         /* a real / division op */
             }
@@ -134,12 +163,21 @@ static TokenType identifierType(void) {
     KW("def",         TOKEN_DEF);
     KW("attribute",   TOKEN_ATTRIBUTE);
     KW("ref",         TOKEN_REF);
+    KW("abstract",    TOKEN_ABSTRACT);
+    KW("derived",     TOKEN_DERIVED);
+    KW("constant",    TOKEN_CONSTANT);
     KW("specializes", TOKEN_SPECIALIZES);
     KW("redefines",   TOKEN_REDEFINES);
     KW("public",      TOKEN_PUBLIC);
     KW("private",     TOKEN_PRIVATE);
     KW("protected",   TOKEN_PROTECTED);
     KW("doc",         TOKEN_DOC);
+    KW("comment",     TOKEN_COMMENT_KW);
+    KW("about",       TOKEN_ABOUT);
+    KW("alias",       TOKEN_ALIAS);
+    KW("for",         TOKEN_FOR);
+    KW("dependency",  TOKEN_DEPENDENCY);
+    KW("enum",        TOKEN_ENUM);
     KW("in",          TOKEN_IN);
     KW("out",         TOKEN_OUT);
     KW("inout",       TOKEN_INOUT);
@@ -350,12 +388,21 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_DEF:            return "DEF";
     case TOKEN_ATTRIBUTE:      return "ATTRIBUTE";
     case TOKEN_REF:            return "REF";
+    case TOKEN_ABSTRACT:       return "ABSTRACT";
+    case TOKEN_DERIVED:        return "DERIVED";
+    case TOKEN_CONSTANT:       return "CONSTANT";
     case TOKEN_SPECIALIZES:    return "SPECIALIZES";
     case TOKEN_REDEFINES:      return "REDEFINES";
     case TOKEN_PUBLIC:         return "PUBLIC";
     case TOKEN_PRIVATE:        return "PRIVATE";
     case TOKEN_PROTECTED:      return "PROTECTED";
     case TOKEN_DOC:            return "DOC";
+    case TOKEN_COMMENT_KW:     return "COMMENT_KW";
+    case TOKEN_ABOUT:          return "ABOUT";
+    case TOKEN_ALIAS:          return "ALIAS";
+    case TOKEN_FOR:            return "FOR";
+    case TOKEN_DEPENDENCY:     return "DEPENDENCY";
+    case TOKEN_ENUM:           return "ENUM";
     case TOKEN_IN:             return "IN";
     case TOKEN_OUT:            return "OUT";
     case TOKEN_INOUT:          return "INOUT";

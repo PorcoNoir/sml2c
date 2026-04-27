@@ -1,0 +1,460 @@
+/* sysmlc — codegen_sysml.c
+ *
+ * Canonical SysML v2 emitter.  See codegen_sysml.h for design notes.
+ *
+ * Implementation shape:
+ *
+ *   - One emit function per NodeKind, plus per-kind helpers (relationship
+ *     clauses, multiplicities, expressions, etc.).  This mirrors the
+ *     JSON emitter's shape so they evolve together.
+ *
+ *   - Indentation is tracked in a small State struct holding the FILE*
+ *     and current depth.  Every emitNode call decides its own newline
+ *     and indent — we don't try to be clever about line packing.
+ *
+ *   - Expressions get conservative parenthesisation: every BINARY is
+ *     wrapped in parens.  This produces output that's slightly noisy
+ *     for nested expressions but guarantees the parser sees the same
+ *     tree on round-trip without operator-precedence reasoning.
+ *
+ *   - Tokens are emitted lexeme-faithfully via fwrite of (start,length).
+ *     For literals we use the same trick the parser uses — we have a
+ *     parsed value but the lexeme is what the user wrote, and that's
+ *     what the round-trip expects to see.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+#include "codegen_sysml.h"
+
+typedef struct {
+    FILE* out;
+    int   depth;
+} S;
+
+/* ---- low-level emitters ---------------------------------------- */
+
+static void emitIndent(S* s) {
+    for (int i = 0; i < s->depth; i++) fputs("    ", s->out);
+}
+
+static void emitToken(S* s, Token t) {
+    if (t.length > 0) fwrite(t.start, 1, (size_t)t.length, s->out);
+}
+
+/* Forward declarations for the mutual recursion. */
+static void emitNode(S* s, const Node* n, bool insideEnumDef);
+static void emitExpression(S* s, const Node* expr);
+
+/* Common helpers used by several kinds. */
+
+static void emitVisibility(S* s, Visibility v) {
+    switch (v) {
+    case VIS_PUBLIC:    fputs("public ", s->out);    break;
+    case VIS_PRIVATE:   fputs("private ", s->out);   break;
+    case VIS_PROTECTED: fputs("protected ", s->out); break;
+    case VIS_DEFAULT:   break;
+    }
+}
+
+static void emitDirection(S* s, Direction d) {
+    switch (d) {
+    case DIR_IN:    fputs("in ",    s->out); break;
+    case DIR_OUT:   fputs("out ",   s->out); break;
+    case DIR_INOUT: fputs("inout ", s->out); break;
+    case DIR_NONE:  break;
+    }
+}
+
+/* Emit the four feature modifiers in their canonical order. */
+static void emitModifiers(S* s, bool d, bool a, bool c, bool r) {
+    if (d) fputs("derived ",  s->out);
+    if (a) fputs("abstract ", s->out);
+    if (c) fputs("constant ", s->out);
+    if (r) fputs("ref ",      s->out);
+}
+
+/* Emit a qualified name with `::` separators.  Honours the
+ * conjugation flag.                                              */
+static void emitQualifiedName(S* s, const Node* q) {
+    if (!q) return;
+    if (q->as.qualifiedName.isConjugated) fputc('~', s->out);
+    for (int i = 0; i < q->as.qualifiedName.partCount; i++) {
+        if (i > 0) fputs("::", s->out);
+        emitToken(s, q->as.qualifiedName.parts[i]);
+    }
+}
+
+/* Emit a comma-separated list of qualified names with a leading
+ * keyword/operator prefix.  Does nothing if the list is empty.    */
+static void emitNameList(S* s, const char* prefix, const NodeList* list) {
+    if (list->count == 0) return;
+    fputs(prefix, s->out);
+    for (int i = 0; i < list->count; i++) {
+        if (i > 0) fputs(", ", s->out);
+        emitQualifiedName(s, list->items[i]);
+    }
+}
+
+/* Emit a multiplicity in `[lo]`, `[lo..hi]`, `[*]`, `[lo..*]` form. */
+static void emitMultiplicity(S* s, const Node* m) {
+    if (!m) return;
+    fputc(' ', s->out);
+    fputc('[', s->out);
+    if (m->as.multiplicity.lowerWildcard) fputc('*', s->out);
+    else                                   fprintf(s->out, "%ld", m->as.multiplicity.lower);
+    if (m->as.multiplicity.isRange) {
+        fputs("..", s->out);
+        if (m->as.multiplicity.upperWildcard) fputc('*', s->out);
+        else                                  fprintf(s->out, "%ld", m->as.multiplicity.upper);
+    }
+    fputc(']', s->out);
+}
+
+/* Emit an endpoint clause (the `connect a to b` or `from a to b`
+ * tail of a connection/flow usage).  Empty list emits nothing.    */
+static void emitEnds(S* s, DefKind kind, const NodeList* ends) {
+    if (ends->count == 0) return;
+    if (kind == DEF_FLOW) fputs(" from ", s->out);
+    else                  fputs(" connect ", s->out);
+    /* Parser produces exactly two ends; defensive code handles other
+     * counts as a comma-list (won't actually trigger).             */
+    if (ends->count >= 1) emitQualifiedName(s, ends->items[0]);
+    if (ends->count >= 2) {
+        fputs(" to ", s->out);
+        emitQualifiedName(s, ends->items[1]);
+    }
+    for (int i = 2; i < ends->count; i++) {
+        fputs(", ", s->out);
+        emitQualifiedName(s, ends->items[i]);
+    }
+}
+
+/* ---- expressions ---------------------------------------------- */
+
+static const char* opSymbol(TokenType t) {
+    switch (t) {
+    case TOKEN_PLUS:           return "+";
+    case TOKEN_MINUS:          return "-";
+    case TOKEN_STAR:           return "*";
+    case TOKEN_SLASH:          return "/";
+    case TOKEN_BANG:           return "!";
+    case TOKEN_EQUAL_EQUAL:    return "==";
+    case TOKEN_BANG_EQUAL:     return "!=";
+    case TOKEN_LESS:           return "<";
+    case TOKEN_LESS_EQUAL:     return "<=";
+    case TOKEN_GREATER:        return ">";
+    case TOKEN_GREATER_EQUAL:  return ">=";
+    default:                   return "?";
+    }
+}
+
+/* Print an expression node — emits parens around every binary so
+ * the parser sees the same tree on round-trip without us having to
+ * compute precedences here.                                       */
+static void emitExpression(S* s, const Node* expr) {
+    if (!expr) return;
+    switch (expr->kind) {
+    case NODE_LITERAL:
+        emitToken(s, expr->as.literal.token);
+        break;
+    case NODE_QUALIFIED_NAME:
+        emitQualifiedName(s, expr);
+        break;
+    case NODE_BINARY:
+        fputc('(', s->out);
+        emitExpression(s, expr->as.binary.left);
+        fprintf(s->out, " %s ", opSymbol(expr->as.binary.op.type));
+        emitExpression(s, expr->as.binary.right);
+        fputc(')', s->out);
+        break;
+    case NODE_UNARY:
+        fprintf(s->out, "%s", opSymbol(expr->as.unary.op.type));
+        emitExpression(s, expr->as.unary.operand);
+        break;
+    default:
+        /* Other node kinds shouldn't appear inside expressions. */
+        break;
+    }
+}
+
+/* ---- per-kind emitters --------------------------------------- */
+
+/* Map a DefKind to the source keyword used to introduce it.  Used
+ * by both definition and usage emitters.                          */
+static const char* defKeyword(DefKind k) {
+    switch (k) {
+    case DEF_PART:       return "part";
+    case DEF_PORT:       return "port";
+    case DEF_INTERFACE:  return "interface";
+    case DEF_ITEM:       return "item";
+    case DEF_CONNECTION: return "connection";
+    case DEF_FLOW:       return "flow";
+    case DEF_END:        return "end";
+    case DEF_ENUM:       return "enum";
+    case DEF_DATATYPE:   return "datatype";    /* no source form, sentinel */
+    case DEF_REFERENCE:  return "ref";          /* bare-ref usage */
+    }
+    return "?";
+}
+
+static void emitDefinition(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.scope.visibility);
+    if (n->as.scope.isAbstract) fputs("abstract ", s->out);
+    fprintf(s->out, "%s def ", defKeyword(n->as.scope.defKind));
+    emitToken(s, n->as.scope.name);
+    emitNameList(s, " :> ",  &n->as.scope.specializes);
+    emitNameList(s, " :>> ", &n->as.scope.redefines);
+
+    if (n->as.scope.memberCount == 0) {
+        fputs(" { }\n", s->out);
+        return;
+    }
+    fputs(" {\n", s->out);
+    s->depth++;
+    bool childIsEnum = (n->as.scope.defKind == DEF_ENUM);
+    for (int i = 0; i < n->as.scope.memberCount; i++) {
+        emitNode(s, n->as.scope.members[i], childIsEnum);
+    }
+    s->depth--;
+    emitIndent(s);
+    fputs("}\n", s->out);
+}
+
+/* Emit a usage value initializer for an enum value: just the bare
+ * identifier with optional `= initializer`.  Used inside enum-def
+ * bodies where the parser expects `name (= expr)? ;` rather than
+ * the full usage syntax.                                          */
+static bool isEnumValue(const Node* n) {
+    /* Enum values are stamped as Attributes whose declared type
+     * resolves to an enum def.  This is a heuristic but matches
+     * the parser's construction.                                  */
+    if (!n || n->kind != NODE_ATTRIBUTE) return false;
+    if (n->as.attribute.types.count != 1) return false;
+    const Node* tref = n->as.attribute.types.items[0];
+    if (!tref || tref->kind != NODE_QUALIFIED_NAME) return false;
+    const Node* td = tref->as.qualifiedName.resolved;
+    return td && td->kind == NODE_DEFINITION
+              && td->as.scope.defKind == DEF_ENUM;
+}
+
+static void emitEnumValue(S* s, const Node* n) {
+    emitIndent(s);
+    emitToken(s, n->as.attribute.name);
+    if (n->as.attribute.defaultValue) {
+        fputs(" = ", s->out);
+        emitExpression(s, n->as.attribute.defaultValue);
+    }
+    fputs(";\n", s->out);
+}
+
+static void emitUsage(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.usage.visibility);
+    emitDirection (s, n->as.usage.direction);
+    emitModifiers (s, n->as.usage.isDerived,
+                       n->as.usage.isAbstract,
+                       n->as.usage.isConstant,
+                       n->as.usage.isReference);
+
+    /* Bare-ref usages (DEF_REFERENCE) print as `ref name : T;` —
+     * the `ref` keyword is already emitted by emitModifiers above
+     * (isReference is always true for these).  Don't add an extra
+     * keyword.                                                     */
+    if (n->as.usage.defKind != DEF_REFERENCE) {
+        fputs(defKeyword(n->as.usage.defKind), s->out);
+        if (n->as.usage.name.length > 0) fputc(' ', s->out);
+    }
+    if (n->as.usage.name.length > 0) {
+        emitToken(s, n->as.usage.name);
+    }
+
+    emitNameList   (s, " : ",   &n->as.usage.types);
+    emitNameList   (s, " :> ",  &n->as.usage.specializes);
+    emitNameList   (s, " :>> ", &n->as.usage.redefines);
+    emitMultiplicity(s, n->as.usage.multiplicity);
+    emitEnds       (s, n->as.usage.defKind, &n->as.usage.ends);
+
+    if (n->as.usage.defaultValue) {
+        fputs(" = ", s->out);
+        emitExpression(s, n->as.usage.defaultValue);
+    }
+
+    if (n->as.usage.memberCount == 0) {
+        fputs(";\n", s->out);
+        return;
+    }
+    fputs(" {\n", s->out);
+    s->depth++;
+    for (int i = 0; i < n->as.usage.memberCount; i++) {
+        emitNode(s, n->as.usage.members[i], false);
+    }
+    s->depth--;
+    emitIndent(s);
+    fputs("}\n", s->out);
+}
+
+static void emitAttribute(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.attribute.visibility);
+    emitModifiers (s, n->as.attribute.isDerived,
+                       n->as.attribute.isAbstract,
+                       n->as.attribute.isConstant,
+                       n->as.attribute.isReference);
+    fputs("attribute ", s->out);
+    emitToken(s, n->as.attribute.name);
+
+    emitNameList   (s, " : ",   &n->as.attribute.types);
+    emitNameList   (s, " :> ",  &n->as.attribute.specializes);
+    emitNameList   (s, " :>> ", &n->as.attribute.redefines);
+    emitMultiplicity(s, n->as.attribute.multiplicity);
+
+    if (n->as.attribute.defaultValue) {
+        fputs(" = ", s->out);
+        emitExpression(s, n->as.attribute.defaultValue);
+    }
+    fputs(";\n", s->out);
+}
+
+static void emitImport(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.import.visibility);
+    fputs("import ", s->out);
+    emitQualifiedName(s, n->as.import.target);
+    if (n->as.import.wildcard) fputs("::*", s->out);
+    fputs(";\n", s->out);
+}
+
+static void emitDoc(S* s, const Node* n) {
+    emitIndent(s);
+    fputs("/**", s->out);
+    emitToken(s, n->as.doc.body);
+    fputs("*/\n", s->out);
+}
+
+static void emitAlias(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.alias.visibility);
+    fputs("alias ", s->out);
+    emitToken(s, n->as.alias.name);
+    fputs(" for ", s->out);
+    emitQualifiedName(s, n->as.alias.target);
+    fputs(";\n", s->out);
+}
+
+static void emitComment(S* s, const Node* n) {
+    emitIndent(s);
+    fputs("comment", s->out);
+    if (n->as.comment.name.length > 0) {
+        fputc(' ', s->out);
+        emitToken(s, n->as.comment.name);
+    }
+    if (n->as.comment.about.count > 0) {
+        fputs(" about ", s->out);
+        for (int i = 0; i < n->as.comment.about.count; i++) {
+            if (i > 0) fputs(", ", s->out);
+            emitQualifiedName(s, n->as.comment.about.items[i]);
+        }
+    }
+    /* Body delimiters preserved so the body can be re-scanned.
+     * Emit verbatim so round-trip is fixed-point — the body's
+     * own leading/trailing whitespace is part of the AST. */
+    fputs(" /*", s->out);
+    emitToken(s, n->as.comment.body);
+    fputs("*/\n", s->out);
+}
+
+static void emitDependency(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.dependency.visibility);
+    fputs("dependency", s->out);
+    if (n->as.dependency.name.length > 0) {
+        fputc(' ', s->out);
+        emitToken(s, n->as.dependency.name);
+    }
+    fputs(" from ", s->out);
+    for (int i = 0; i < n->as.dependency.sources.count; i++) {
+        if (i > 0) fputs(", ", s->out);
+        emitQualifiedName(s, n->as.dependency.sources.items[i]);
+    }
+    fputs(" to ", s->out);
+    for (int i = 0; i < n->as.dependency.targets.count; i++) {
+        if (i > 0) fputs(", ", s->out);
+        emitQualifiedName(s, n->as.dependency.targets.items[i]);
+    }
+    fputs(";\n", s->out);
+}
+
+static void emitPackage(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.scope.visibility);
+    fputs("package ", s->out);
+    emitToken(s, n->as.scope.name);
+
+    if (n->as.scope.memberCount == 0) {
+        fputs(" { }\n", s->out);
+        return;
+    }
+    fputs(" {\n", s->out);
+    s->depth++;
+    for (int i = 0; i < n->as.scope.memberCount; i++) {
+        emitNode(s, n->as.scope.members[i], false);
+    }
+    s->depth--;
+    emitIndent(s);
+    fputs("}\n", s->out);
+}
+
+static void emitProgram(S* s, const Node* n) {
+    /* Program is the synthetic root container; we don't print it
+     * as a node.  Just walk its members. */
+    for (int i = 0; i < n->as.scope.memberCount; i++) {
+        emitNode(s, n->as.scope.members[i], false);
+    }
+}
+
+/* Dispatcher. */
+static void emitNode(S* s, const Node* n, bool insideEnumDef) {
+    if (!n) return;
+
+    /* Inside an enum def's body, attributes are enum values and use
+     * a slimmer syntax (no `attribute` keyword, no type clause —
+     * the type is implicit from the enclosing enum).  We rely on
+     * the structural context (insideEnumDef) for this; the AST
+     * shape alone isn't a reliable signal because user-written
+     * attributes can also be enum-typed.                            */
+    if (insideEnumDef && isEnumValue(n)) { emitEnumValue(s, n); return; }
+
+    switch (n->kind) {
+    case NODE_PROGRAM:        emitProgram   (s, n); break;
+    case NODE_PACKAGE:        emitPackage   (s, n); break;
+    case NODE_DEFINITION:     emitDefinition(s, n); break;
+    case NODE_USAGE:          emitUsage     (s, n); break;
+    case NODE_ATTRIBUTE:      emitAttribute (s, n); break;
+    case NODE_IMPORT:         emitImport    (s, n); break;
+    case NODE_DOC:            emitDoc       (s, n); break;
+    case NODE_ALIAS:          emitAlias     (s, n); break;
+    case NODE_COMMENT:        emitComment   (s, n); break;
+    case NODE_DEPENDENCY:     emitDependency(s, n); break;
+
+    /* These shouldn't appear at statement positions; they are
+     * embedded inside other emitters via emitExpression /
+     * emitQualifiedName / emitMultiplicity.                       */
+    case NODE_QUALIFIED_NAME:
+    case NODE_MULTIPLICITY:
+    case NODE_LITERAL:
+    case NODE_BINARY:
+    case NODE_UNARY:
+        break;
+    }
+}
+
+/* ---- public entry --------------------------------------------- */
+
+void emitSysml(FILE* out, const Node* program) {
+    S s = { .out = out, .depth = 0 };
+    emitNode(&s, program, false);
+}

@@ -1,0 +1,536 @@
+{
+  "kind": "Program",
+  "members": [
+    {
+      "kind": "Package",
+      "name": "ConnectionsDemo",
+      "visibility": "default",
+      "members": [
+        {
+          "kind": "Import",
+          "visibility": "private",
+          "wildcard": true,
+          "target": {
+            "kind": "QualifiedName",
+            "parts": ["ScalarValues"],
+            "resolvedTo": "ScalarValues"
+          }
+        },
+        {
+          "kind": "Definition",
+          "defKind": "ItemDef",
+          "name": "Signal",
+          "visibility": "default",
+          "specializes": [],
+          "redefines": [],
+          "members": [
+            {
+              "kind": "Attribute",
+              "name": "strength",
+              "visibility": "default",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Real"],
+                  "resolvedTo": "Real"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "default": null
+            }
+          ]
+        },
+        {
+          "kind": "Definition",
+          "defKind": "InterfaceDef",
+          "name": "Bus",
+          "visibility": "default",
+          "specializes": [
+            {
+              "kind": "QualifiedName",
+              "parts": ["Signal"],
+              "resolvedTo": "Signal"
+            },
+            {
+              "kind": "QualifiedName",
+              "parts": ["Real"],
+              "resolvedTo": "Real"
+            }
+          ],
+          "redefines": [],
+          "members": []
+        },
+        {
+          "kind": "Definition",
+          "defKind": "ConnectionDef",
+          "name": "Wire",
+          "visibility": "default",
+          "specializes": [
+            {
+              "kind": "QualifiedName",
+              "parts": ["Bus"],
+              "resolvedTo": "Bus"
+            }
+          ],
+          "redefines": [],
+          "members": [
+            {
+              "kind": "Usage",
+              "defKind": "End",
+              "name": "source",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "End",
+              "name": "target",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": {
+                "kind": "Multiplicity",
+                "lower": 1,
+                "isRange": true,
+                "upper": "*"
+              },
+              "ends": [],
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "Definition",
+          "defKind": "FlowDef",
+          "name": "DataFlow",
+          "visibility": "default",
+          "specializes": [],
+          "redefines": [],
+          "members": [
+            {
+              "kind": "Usage",
+              "defKind": "End",
+              "name": "producer",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "End",
+              "name": "consumer",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "Definition",
+          "defKind": "PartDef",
+          "name": "Sensor",
+          "visibility": "default",
+          "specializes": [],
+          "redefines": [],
+          "members": [
+            {
+              "kind": "Usage",
+              "defKind": "PortDef",
+              "name": "reading",
+              "visibility": "default",
+              "direction": "out",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "PortDef",
+              "name": "command",
+              "visibility": "default",
+              "direction": "in",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "PortDef",
+              "name": "bidir",
+              "visibility": "default",
+              "direction": "inout",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "Definition",
+          "defKind": "PartDef",
+          "name": "Logger",
+          "visibility": "default",
+          "specializes": [],
+          "redefines": [],
+          "members": [
+            {
+              "kind": "Usage",
+              "defKind": "PortDef",
+              "name": "input",
+              "visibility": "default",
+              "direction": "in",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "PortDef",
+              "name": "bidir",
+              "visibility": "default",
+              "direction": "inout",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal"],
+                  "resolvedTo": "Signal"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "Usage",
+          "defKind": "PartDef",
+          "name": "system",
+          "visibility": "default",
+          "direction": "none",
+          "types": [
+            {
+              "kind": "QualifiedName",
+              "parts": ["Sensor"],
+              "resolvedTo": "Sensor"
+            }
+          ],
+          "specializes": [],
+          "redefines": [],
+          "multiplicity": null,
+          "ends": [],
+          "members": [
+            {
+              "kind": "Usage",
+              "defKind": "PartDef",
+              "name": "s",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Sensor"],
+                  "resolvedTo": "Sensor"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "PartDef",
+              "name": "l",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Logger"],
+                  "resolvedTo": "Logger"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "ConnectionDef",
+              "name": null,
+              "visibility": "default",
+              "direction": "none",
+              "types": [],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["s", "reading"],
+                  "resolvedTo": "reading"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["l", "input"],
+                  "resolvedTo": "input"
+                }
+              ],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "ConnectionDef",
+              "name": "c1",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Wire"],
+                  "resolvedTo": "Wire"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["s", "reading"],
+                  "resolvedTo": "reading"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["l", "input"],
+                  "resolvedTo": "input"
+                }
+              ],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "FlowDef",
+              "name": null,
+              "visibility": "default",
+              "direction": "none",
+              "types": [],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["s", "reading"],
+                  "resolvedTo": "reading"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["l", "input"],
+                  "resolvedTo": "input"
+                }
+              ],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "FlowDef",
+              "name": "signalFlow",
+              "visibility": "default",
+              "direction": "none",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["DataFlow"],
+                  "resolvedTo": "DataFlow"
+                }
+              ],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["s", "reading"],
+                  "resolvedTo": "reading"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["l", "input"],
+                  "resolvedTo": "input"
+                }
+              ],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "FlowDef",
+              "name": null,
+              "visibility": "default",
+              "direction": "none",
+              "types": [],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["s", "bidir"],
+                  "resolvedTo": "bidir"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["l", "bidir"],
+                  "resolvedTo": "bidir"
+                }
+              ],
+              "members": []
+            },
+            {
+              "kind": "Usage",
+              "defKind": "FlowDef",
+              "name": null,
+              "visibility": "default",
+              "direction": "none",
+              "types": [],
+              "specializes": [],
+              "redefines": [],
+              "multiplicity": null,
+              "ends": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["s", "reading"],
+                  "resolvedTo": "reading"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["l", "bidir"],
+                  "resolvedTo": "bidir"
+                }
+              ],
+              "members": []
+            },
+            {
+              "kind": "Attribute",
+              "name": "everything",
+              "visibility": "default",
+              "types": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Real"],
+                  "resolvedTo": "Real"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Integer"],
+                  "resolvedTo": "Integer"
+                }
+              ],
+              "specializes": [
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Signal", "strength"],
+                  "resolvedTo": "strength"
+                },
+                {
+                  "kind": "QualifiedName",
+                  "parts": ["Bus"],
+                  "resolvedTo": "Bus"
+                }
+              ],
+              "redefines": [],
+              "multiplicity": null,
+              "default": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

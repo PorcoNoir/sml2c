@@ -247,3 +247,26 @@ test-all: $(BIN)
 
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR) $(BUILD_DIR)
+
+# ---- Python tooling smoke test ---------------------------------------
+#
+# Sanity check: the graphsml2 adapter should convert every positive
+# .sysml test's JSON without erroring.  The script's own walk-print
+# shows the structure; we just need it to exit cleanly.
+
+.PHONY: test-graphsml
+test-graphsml: $(BIN)
+	@pass=0; fail=0; \
+	for f in $(TEST_FILES); do \
+	    base=$$(basename $$f); \
+	    out=$$(./$(BIN) --emit-json $$f 2>/dev/null | python3 tools/sml2c_to_graphsml.py - 2>&1); \
+	    if [ $$? -eq 0 ]; then \
+	        pass=$$((pass+1)); \
+	    else \
+	        echo "  FAIL  $$base"; \
+	        echo "$$out" | sed 's/^/        /'; \
+	        fail=$$((fail+1)); \
+	    fi; \
+	done; \
+	echo "  graphsml adapter: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]

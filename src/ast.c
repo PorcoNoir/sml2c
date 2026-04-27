@@ -122,6 +122,18 @@ static void emitDirection(Direction d) {
     }
 }
 
+/* Emit feature-modifier flags in the canonical SysML v2 order:
+ *   derived → abstract → constant → ref
+ * Matches the RefPrefix/BasicUsagePrefix grammar so output reads in
+ * the same order it would have been written in the source. */
+static void emitFeatureModifiers(bool isDerived, bool isAbstract,
+                                 bool isConstant, bool isReference) {
+    if (isDerived)   printf("derived ");
+    if (isAbstract)  printf("abstract ");
+    if (isConstant)  printf("constant ");
+    if (isReference) printf("ref ");
+}
+
 /* Map a DefKind to the human-readable label used in the AST dump.
  * The two arrays preserve the older "PartDef" / "Part" output that
  * existing test files compare against.                             */
@@ -129,11 +141,15 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
     static const char* defs[] = {
         "PartDef", "PortDef", "InterfaceDef",
         "ItemDef", "ConnectionDef", "FlowDef",
-        "?EndDef"   /* ends have no def form; sentinel for misuse */
+        "?EndDef",  /* ends have no def form; sentinel for misuse  */
+        "DataTypeDef",
+        "EnumDef"
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
-        "Item", "Connection", "Flow", "End"
+        "Item", "Connection", "Flow", "End",
+        "DataType",  /* not produced by the parser, used by stdlib  */
+        "EnumValue"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -238,6 +254,7 @@ static void printNode(const Node* n, int depth) {
 
     case NODE_DEFINITION:
         emitVisibility(n->as.scope.visibility);
+        emitFeatureModifiers(false, n->as.scope.isAbstract, false, false);
         printf("%s '", kindLabel(n->as.scope.defKind, true));
         emitToken(n->as.scope.name);
         printf("'");
@@ -251,6 +268,8 @@ static void printNode(const Node* n, int depth) {
     case NODE_USAGE:
         emitVisibility(n->as.usage.visibility);
         emitDirection(n->as.usage.direction);
+        emitFeatureModifiers(n->as.usage.isDerived,  n->as.usage.isAbstract,
+                             n->as.usage.isConstant, n->as.usage.isReference);
         printf("%s", kindLabel(n->as.usage.defKind, false));
         if (n->as.usage.name.length > 0) {
             printf(" '"); emitToken(n->as.usage.name); printf("'");
@@ -267,6 +286,8 @@ static void printNode(const Node* n, int depth) {
 
     case NODE_ATTRIBUTE:
         emitVisibility(n->as.attribute.visibility);
+        emitFeatureModifiers(n->as.attribute.isDerived,  n->as.attribute.isAbstract,
+                             n->as.attribute.isConstant, n->as.attribute.isReference);
         printf("Attribute '"); emitToken(n->as.attribute.name); printf("'");
         emitNameList(" : ",   &n->as.attribute.types);
         emitNameList(" :> ",  &n->as.attribute.specializes);
@@ -313,6 +334,60 @@ static void printNode(const Node* n, int depth) {
                (nl < end) ? " ..." : "");
         break;
     }
+
+    case NODE_ALIAS:
+        printf("Alias '%.*s' for ",
+               n->as.alias.name.length, n->as.alias.name.start);
+        emitQualifiedName(n->as.alias.target);
+        printf("\n");
+        break;
+
+    case NODE_COMMENT:
+        printf("Comment");
+        if (n->as.comment.name.length > 0) {
+            printf(" '%.*s'",
+                   n->as.comment.name.length, n->as.comment.name.start);
+        }
+        if (n->as.comment.about.count > 0) {
+            printf(" about ");
+            for (int i = 0; i < n->as.comment.about.count; i++) {
+                if (i) printf(", ");
+                emitQualifiedName(n->as.comment.about.items[i]);
+            }
+        }
+        /* Body preview only — same shape as DOC. */
+        {
+            Token b = n->as.comment.body;
+            const char* s = b.start;
+            const char* e = b.start + b.length;
+            while (s < e && (*s == ' ' || *s == '\t' || *s == '\n')) s++;
+            const char* nl = s;
+            while (nl < e && *nl != '\n') nl++;
+            printf(" \"%.*s%s\"\n",
+                   (int)(nl - s), s,
+                   (nl < e) ? " ..." : "");
+        }
+        break;
+
+    case NODE_DEPENDENCY:
+        emitVisibility(n->as.dependency.visibility);
+        printf("Dependency");
+        if (n->as.dependency.name.length > 0) {
+            printf(" '%.*s'",
+                   n->as.dependency.name.length, n->as.dependency.name.start);
+        }
+        printf(" from ");
+        for (int i = 0; i < n->as.dependency.sources.count; i++) {
+            if (i) printf(", ");
+            emitQualifiedName(n->as.dependency.sources.items[i]);
+        }
+        printf(" to ");
+        for (int i = 0; i < n->as.dependency.targets.count; i++) {
+            if (i) printf(", ");
+            emitQualifiedName(n->as.dependency.targets.items[i]);
+        }
+        printf("\n");
+        break;
 
     /* The three expression kinds are normally embedded inside another
      * node (an attribute's default value, eventually a multiplicity

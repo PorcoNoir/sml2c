@@ -21,10 +21,12 @@ package ConnectionsDemo {
     part def Sensor {
         out port reading  : Signal;
         in  port command  : Signal;
+        inout port bidir  : Signal;
     }
 
     part def Logger {
         in port input : Signal;
+        inout port bidir : Signal;
     }
 
     /* System composition exercising the new endpoint clauses. */
@@ -43,6 +45,10 @@ package ConnectionsDemo {
 
         // named flow with type and endpoints
         flow signalFlow : DataFlow from s.reading to l.input;
+
+        // inout ports work as both flow source and target
+        flow from s.bidir to l.bidir;
+        flow from s.reading to l.bidir;
 
         // attribute carrying multi-valued type and specializes lists
         attribute everything : Real, Integer :> Signal::strength, Bus;

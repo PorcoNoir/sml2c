@@ -4,6 +4,15 @@
  * appear in the AST as a NODE_USAGE with a non-empty `ends` list of
  * qualified-name references.  Each reference must resolve to a
  * port-typed feature.
+ *
+ * For flows specifically, we additionally check direction:
+ *   `from a`  — a's port direction must be `out` or `inout`
+ *   `to b`    — b's port direction must be `in` or `inout`
+ *
+ * Direction checks only fire when the resolved end is *directly* a
+ * port usage; indirect cases (a feature whose type contains an
+ * inner port) are skipped — they need richer member-walking that
+ * we'll add when there's demand.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +69,8 @@ static const char* describeNode(const Node* n) {
         case DEF_FLOW:       return "flow usage";
         case DEF_END:        return "end declaration";
         case DEF_DATATYPE:   return "datatype usage";
+        case DEF_ENUM:       return "enum value";
+        case DEF_REFERENCE:  return "reference usage";
         }
         return "usage";
     case NODE_ATTRIBUTE:  return "attribute";
@@ -69,18 +80,53 @@ static const char* describeNode(const Node* n) {
     }
 }
 
-/* Check one end reference. */
-static void checkEnd(const Node* endRef) {
+static const char* dirStr(Direction d) {
+    switch (d) {
+    case DIR_NONE:  return "none";
+    case DIR_IN:    return "in";
+    case DIR_OUT:   return "out";
+    case DIR_INOUT: return "inout";
+    }
+    return "?";
+}
+
+/* What role does this end play? */
+typedef enum {
+    END_CONNECT,        /* `connect a to b` — no direction constraint   */
+    END_FLOW_FROM,      /* source side of `flow from a to b`            */
+    END_FLOW_TO         /* target side of `flow from a to b`            */
+} EndRole;
+
+static void checkEnd(const Node* endRef, EndRole role) {
     if (!endRef || endRef->kind != NODE_QUALIFIED_NAME) return;
     const Node* resolved = endRef->as.qualifiedName.resolved;
-    /* If the reference was tentatively accepted (resolved is NULL),
-     * the resolver would have already flagged it if it could.  We
-     * defer rather than double-reporting here.                    */
+    /* Tentatively-accepted references: the resolver would have flagged
+     * if it could.  Don't double-report. */
     if (!resolved) return;
+
     if (!isPortLike(resolved)) {
         connectionError(endRef->line,
                         "Connection end must reference a port-typed feature; got %s.",
                         describeNode(resolved));
+        return;     /* don't bother with direction check on a non-port */
+    }
+
+    /* Direction check fires only for flows AND only when the resolved
+     * end is directly a port usage.  Features with port-typed members
+     * are deferred. */
+    if (role == END_CONNECT) return;
+    if (resolved->kind != NODE_USAGE || resolved->as.usage.defKind != DEF_PORT) return;
+
+    Direction d = resolved->as.usage.direction;
+    if (role == END_FLOW_FROM && d != DIR_OUT && d != DIR_INOUT) {
+        connectionError(endRef->line,
+                        "Flow source port must be 'out' or 'inout'; got '%s'.",
+                        dirStr(d));
+    }
+    if (role == END_FLOW_TO && d != DIR_IN && d != DIR_INOUT) {
+        connectionError(endRef->line,
+                        "Flow target port must be 'in' or 'inout'; got '%s'.",
+                        dirStr(d));
     }
 }
 
@@ -97,16 +143,19 @@ static void walk(const Node* n) {
         break;
 
     case NODE_USAGE: {
-        /* If this usage is a connection or flow with explicit endpoints,
-         * verify each end resolves to a port-like feature. */
         const NodeList* ends = &n->as.usage.ends;
         if (ends->count > 0) {
+            bool isFlow = (n->as.usage.defKind == DEF_FLOW);
+            /* Parser produces exactly 2 ends; defensive code handles
+             * other counts by treating extras as connection-style. */
             for (int i = 0; i < ends->count; i++) {
-                checkEnd(ends->items[i]);
+                EndRole role;
+                if (isFlow && i == 0)      role = END_FLOW_FROM;
+                else if (isFlow && i == 1) role = END_FLOW_TO;
+                else                       role = END_CONNECT;
+                checkEnd(ends->items[i], role);
             }
         }
-        /* Also recurse into the body (a connection def body might
-         * contain nested usages with their own connect clauses). */
         for (int i = 0; i < n->as.usage.memberCount; i++) {
             walk(n->as.usage.members[i]);
         }

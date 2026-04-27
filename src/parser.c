@@ -104,6 +104,14 @@ static void synchronize(void) {
         case TOKEN_CONNECT:
         case TOKEN_ATTRIBUTE:
         case TOKEN_DOC:
+        case TOKEN_COMMENT_KW:
+        case TOKEN_ALIAS:
+        case TOKEN_DEPENDENCY:
+        case TOKEN_ENUM:
+        case TOKEN_ABSTRACT:    /* feature modifiers can begin a decl */
+        case TOKEN_DERIVED:
+        case TOKEN_CONSTANT:
+        case TOKEN_REF:
         case TOKEN_RIGHT_BRACE:
             return;
         default: ;
@@ -561,6 +569,11 @@ static const KindInfo kItem       = { DEF_ITEM,       false, true,  false, "item
 static const KindInfo kConnection = { DEF_CONNECTION, false, true,  true,  "connection" };
 static const KindInfo kFlow       = { DEF_FLOW,       false, true,  true,  "flow"       };
 static const KindInfo kEnd        = { DEF_END,        false, false, false, "end"        };
+static const KindInfo kEnum       = { DEF_ENUM,       false, true,  false, "enum"       };
+/* ReferenceUsage has no `def` form (defAllowed=false): it's a Usage
+ * only.  No keyword to consume — caller invokes usage() directly,
+ * not definitionOrUsage().                                          */
+static const KindInfo kReference  = { DEF_REFERENCE,  false, false, false, "reference"  };
 
 /* Parse a "connect a to b" or "from a to b" clause.  Caller has
  * already consumed the opening keyword (CONNECT or FROM).  Appends
@@ -592,10 +605,47 @@ static Node* definition(const KindInfo* k) {
     /* rels.types and rels.multiplicity are silently dropped on a
      * definition; semantic check will warn.                            */
 
-    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-        Node* m = declaration();
-        if (m) astAppendScopeMember(def, m);
-        if (parser.panicMode) synchronize();
+    /* Enum def bodies have a different shape: each member is
+     * `IDENTIFIER ( "=" expression )? ";"`.  The optional initializer
+     * lets values carry an explicit code (e.g. `stop = 0;` for
+     * traffic-light enumerations).                                    */
+    if (k->kind == DEF_ENUM) {
+        while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+            if (!match(TOKEN_IDENTIFIER)) {
+                errorAtCurrent("Expected enumeration value name.");
+                advance();
+                if (parser.panicMode) synchronize();
+                continue;
+            }
+            Token vname = parser.previous;
+            int vline = vname.line;
+            Node* initializer = NULL;
+            if (match(TOKEN_EQUAL)) {
+                initializer = expression();
+            }
+            consume(TOKEN_SEMICOLON, "Expected ';' after enumeration value.");
+            /* Each enum value is modeled as an Attribute carrying the
+             * enclosing enum as its declared type.  The synthetic type
+             * reference is a one-segment qualified name with `resolved`
+             * pre-filled to the enum def itself — so by the time later
+             * passes see it, it's already bound and they can treat the
+             * value uniformly with `attribute red : Color = ...`.    */
+            Node* typeRef = astMakeNode(NODE_QUALIFIED_NAME, vline);
+            astAppendQualifiedPart(typeRef, def->as.scope.name);
+            typeRef->as.qualifiedName.resolved = def;
+
+            Node* v = astMakeNode(NODE_ATTRIBUTE, vline);
+            v->as.attribute.name         = vname;
+            v->as.attribute.defaultValue = initializer;
+            astListAppend(&v->as.attribute.types, typeRef);
+            astAppendScopeMember(def, v);
+        }
+    } else {
+        while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+            Node* m = declaration();
+            if (m) astAppendScopeMember(def, m);
+            if (parser.panicMode) synchronize();
+        }
     }
     consume(TOKEN_RIGHT_BRACE, "Expected '}' to close definition.");
     return def;
@@ -643,6 +693,13 @@ static Node* usage(const KindInfo* k, Direction dir) {
     u->as.usage.multiplicity = rels.multiplicity;
     u->as.usage.ends         = ends;
 
+    /* Optional initializer: `= expression` before the closing `;`.
+     * Currently used by bare-ref usages (`ref nominalTorque : Real = 100;`)
+     * but allowed on any kind for symmetry with attribute usages.  */
+    if (match(TOKEN_EQUAL)) {
+        u->as.usage.defaultValue = expression();
+    }
+
     if (match(TOKEN_LEFT_BRACE)) {
         while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
             Node* m = declaration();
@@ -656,12 +713,45 @@ static Node* usage(const KindInfo* k, Direction dir) {
     return u;
 }
 
+/*  FeatureModifiers — the four flags from the SysML v2 RefPrefix +
+ *  BasicUsagePrefix grammar (per the OMG SysML v2 textual notation
+ *  and the Pilot Implementation Xtext grammar).  The canonical
+ *  prefix order is positional, not free:
+ *
+ *      direction? derived? (abstract|variation)? constant? ref?
+ *
+ *  We absorb `direction` separately upstream (in declaration()), and
+ *  defer `variation` until later.  So this helper consumes the
+ *  remaining four in their fixed order: derived, abstract, constant,
+ *  ref.  Each is at-most-once; the parser does not reorder them.    */
+typedef struct {
+    bool isDerived;
+    bool isAbstract;
+    bool isConstant;
+    bool isReference;
+} FeatureModifiers;
+
+static FeatureModifiers parseFeatureModifiers(void) {
+    FeatureModifiers m = {0};
+    if (match(TOKEN_DERIVED))  m.isDerived  = true;
+    if (match(TOKEN_ABSTRACT)) m.isAbstract = true;
+    if (match(TOKEN_CONSTANT)) m.isConstant = true;
+    if (match(TOKEN_REF))      m.isReference = true;
+    return m;
+}
+
+/* True if any modifier flag is set — used to detect modifiers on
+ * declarations that don't accept any. */
+static bool hasAnyModifier(FeatureModifiers m) {
+    return m.isDerived || m.isAbstract || m.isConstant || m.isReference;
+}
+
 /*  Dispatch: caller has consumed the kind keyword (and any direction
  *  prefix).  If the next token is `def`, we're a definition; otherwise
  *  a usage.  A direction prefix is only meaningful on a usage; on a
  *  definition it's an error.  Kinds that don't have a `def` form
  *  (notably `end`) reject `def` here.                                 */
-static Node* definitionOrUsage(const KindInfo* k, Direction dir) {
+static Node* definitionOrUsage(const KindInfo* k, Direction dir, FeatureModifiers m) {
     if (check(TOKEN_DEF)) {
         if (!k->defAllowed) {
             errorAtCurrent("This kind has no 'def' form.");
@@ -670,12 +760,32 @@ static Node* definitionOrUsage(const KindInfo* k, Direction dir) {
         if (dir != DIR_NONE) {
             error("Direction modifier is not valid on a definition.");
         }
-        return definition(k);
+        /* Definitions accept only `abstract`; the value-bearing flags
+         * (derived, constant) and `ref` are usage-only.               */
+        if (m.isDerived) {
+            error("'derived' is not valid on a definition.");
+        }
+        if (m.isConstant) {
+            error("'constant' is not valid on a definition.");
+        }
+        if (m.isReference) {
+            error("'ref' is not valid on a definition.");
+        }
+        Node* d = definition(k);
+        if (d) d->as.scope.isAbstract = m.isAbstract;
+        return d;
     }
     if (dir != DIR_NONE && !k->allowsDirection) {
         error("Direction modifier is not valid on this kind of usage.");
     }
-    return usage(k, dir);
+    Node* u = usage(k, dir);
+    if (u && u->kind == NODE_USAGE) {
+        u->as.usage.isDerived   = m.isDerived;
+        u->as.usage.isAbstract  = m.isAbstract;
+        u->as.usage.isConstant  = m.isConstant;
+        u->as.usage.isReference = m.isReference;
+    }
+    return u;
 }
 
 /*  Standalone "connect a to b ;" — no preceding `connection` keyword.
@@ -738,21 +848,113 @@ static Node* docDecl(void) {
     return d;
 }
 
-/*  declaration ::= visibility? direction? ( docDecl | packageDecl
- *                                          | importDecl
- *                                          | partDecl    | portDecl
- *                                          | interfaceDecl | itemDecl
- *                                          | connectionDecl | flowDecl
- *                                          | attributeDecl )
- *  visibility  ::= "public" | "private" | "protected"
- *  direction   ::= "in" | "out" | "inout"
+/*  aliasDecl ::= "alias" IDENTIFIER "for" qualifiedName ";"
  *
- *  Visibility and direction are optional prefixes consumed once and
- *  threaded into the resulting node, so each grammar rule below stays
- *  ignorant of them.  A direction without a kind that allows it (or
- *  on a definition) becomes an error inside definitionOrUsage.        */
+ * Creates a named alias for an existing element.  At parse time we
+ * just record the name and the qualified-name target; the resolver
+ * binds the alias name in the enclosing scope and resolves the
+ * target reference.                                                */
+static Node* aliasDecl(void) {
+    int line = parser.previous.line;            /* 'alias' just consumed */
+    consume(TOKEN_IDENTIFIER, "Expected alias name.");
+    Token name = parser.previous;
+    consume(TOKEN_FOR, "Expected 'for' after alias name.");
+    Node* target = qualifiedName();
+    consume(TOKEN_SEMICOLON, "Expected ';' after alias.");
+
+    Node* a = astMakeNode(NODE_ALIAS, line);
+    a->as.alias.name       = name;
+    a->as.alias.visibility = VIS_DEFAULT;
+    a->as.alias.target     = target;
+    return a;
+}
+
+/*  commentDecl ::= "comment" IDENTIFIER? ( "about" qualifiedName ("," qualifiedName)* )?
+ *                 BLOCK_COMMENT_BODY
+ *
+ * The body is recovered from the scanner's rolling save of the most
+ * recently-skipped slash-star block.  This works regardless of where
+ * the body falls relative to the optional name and about-list:
+ * skipWhitespace stashes the body whenever it eats one, and we read
+ * it after parsing the header.  Both the name and the about-list are
+ * optional. */
+static Node* commentDecl(void) {
+    int line = parser.previous.line;            /* 'comment' just consumed */
+
+    Token name = {0};
+    if (check(TOKEN_IDENTIFIER)) {
+        advance();
+        name = parser.previous;
+    }
+
+    NodeList about = {0};
+    if (match(TOKEN_ABOUT)) {
+        appendQualifiedNameList(&about);
+    }
+
+    /* The body should have been skipped by one of the advances above
+     * (or, for the bare anonymous form, by the advance that consumed
+     * the keyword itself).  Pull it from the rolling save. */
+    Token body = takeLastBlockComment();
+    if (body.type != TOKEN_DOC_BODY) {
+        errorAtCurrent("Expected a block comment after 'comment'.");
+    }
+
+    Node* c = astMakeNode(NODE_COMMENT, line);
+    c->as.comment.name  = name;
+    c->as.comment.about = about;
+    c->as.comment.body  = body;
+    return c;
+}
+
+/*  dependencyDecl ::= "dependency" IDENTIFIER? "from" qualifiedNameList "to" qualifiedNameList ";"
+ *
+ * A directed relationship from the source list to the target list. */
+static Node* dependencyDecl(void) {
+    int line = parser.previous.line;            /* 'dependency' just consumed */
+
+    Token name = {0};
+    if (check(TOKEN_IDENTIFIER)) {
+        advance();
+        name = parser.previous;
+    }
+
+    consume(TOKEN_FROM, "Expected 'from' in dependency.");
+    NodeList sources = {0};
+    appendQualifiedNameList(&sources);
+
+    consume(TOKEN_TO, "Expected 'to' in dependency.");
+    NodeList targets = {0};
+    appendQualifiedNameList(&targets);
+
+    consume(TOKEN_SEMICOLON, "Expected ';' after dependency.");
+
+    Node* d = astMakeNode(NODE_DEPENDENCY, line);
+    d->as.dependency.name       = name;
+    d->as.dependency.visibility = VIS_DEFAULT;
+    d->as.dependency.sources    = sources;
+    d->as.dependency.targets    = targets;
+    return d;
+}
+
+/*  declaration ::= visibility? direction? featureModifier*
+ *                  ( docDecl | packageDecl | importDecl
+ *                  | partDecl | portDecl | interfaceDecl | itemDecl
+ *                  | connectionDecl | flowDecl | endDecl
+ *                  | connectStatement | attributeDecl )
+ *
+ *  visibility       ::= "public" | "private" | "protected"
+ *  direction        ::= "in" | "out" | "inout"
+ *  featureModifier  ::= "derived" | "abstract" | "constant" | "ref"
+ *
+ *  Visibility, direction, and the four feature modifiers are absorbed
+ *  here as optional prefixes and threaded into the resulting node.
+ *  Each grammar rule below stays ignorant of them.  Per the OMG SysML
+ *  v2 spec, the modifiers are positional, not free-order — see
+ *  parseFeatureModifiers.  Modifiers that aren't valid on the chosen
+ *  kind (e.g. `derived` on a package) become errors here.            */
 static Node* declaration(void) {
-    /* Doc forms come first — they don't take visibility or direction. */
+    /* Doc forms come first — they don't take any prefix. */
     if (check(TOKEN_DOC) || check(TOKEN_DOC_BODY)) return docDecl();
 
     Visibility vis = VIS_DEFAULT;
@@ -765,32 +967,80 @@ static Node* declaration(void) {
     else if (match(TOKEN_OUT))   dir = DIR_OUT;
     else if (match(TOKEN_INOUT)) dir = DIR_INOUT;
 
+    FeatureModifiers mods = parseFeatureModifiers();
+
     Node* result = NULL;
     if (match(TOKEN_PACKAGE)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on a package.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on a package.");
         result = packageDecl();
     } else if (match(TOKEN_IMPORT)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on an import.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on an import.");
         result = importDecl();
-    } else if (match(TOKEN_PART))       result = definitionOrUsage(&kPart,       dir);
-    else if (match(TOKEN_PORT))         result = definitionOrUsage(&kPort,       dir);
-    else if (match(TOKEN_INTERFACE))    result = definitionOrUsage(&kInterface,  dir);
-    else if (match(TOKEN_ITEM))         result = definitionOrUsage(&kItem,       dir);
-    else if (match(TOKEN_CONNECTION))   result = definitionOrUsage(&kConnection, dir);
-    else if (match(TOKEN_FLOW))         result = definitionOrUsage(&kFlow,       dir);
-    else if (match(TOKEN_END))          result = definitionOrUsage(&kEnd,        dir);
+    } else if (match(TOKEN_ALIAS)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on an alias.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on an alias.");
+        result = aliasDecl();
+        if (result) result->as.alias.visibility = vis;
+        vis = VIS_DEFAULT;          /* already applied */
+    } else if (match(TOKEN_COMMENT_KW)) {
+        if (vis != VIS_DEFAULT) error("Visibility modifier is not valid on a comment.");
+        if (dir != DIR_NONE) error("Direction modifier is not valid on a comment.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on a comment.");
+        result = commentDecl();
+    } else if (match(TOKEN_DEPENDENCY)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on a dependency.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on a dependency.");
+        result = dependencyDecl();
+        if (result) result->as.dependency.visibility = vis;
+        vis = VIS_DEFAULT;
+    } else if (match(TOKEN_PART))       result = definitionOrUsage(&kPart,       dir, mods);
+    else if (match(TOKEN_PORT))         result = definitionOrUsage(&kPort,       dir, mods);
+    else if (match(TOKEN_INTERFACE))    result = definitionOrUsage(&kInterface,  dir, mods);
+    else if (match(TOKEN_ITEM))         result = definitionOrUsage(&kItem,       dir, mods);
+    else if (match(TOKEN_CONNECTION))   result = definitionOrUsage(&kConnection, dir, mods);
+    else if (match(TOKEN_FLOW))         result = definitionOrUsage(&kFlow,       dir, mods);
+    else if (match(TOKEN_END))          result = definitionOrUsage(&kEnd,        dir, mods);
+    else if (match(TOKEN_ENUM))         result = definitionOrUsage(&kEnum,       dir, mods);
     else if (match(TOKEN_CONNECT)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on connect.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on connect.");
         result = connectStatement();
     }
     else if (match(TOKEN_ATTRIBUTE)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on an attribute.");
         result = attributeDecl();
+        /* Attributes accept all four modifiers (they're usages). */
+        if (result && result->kind == NODE_ATTRIBUTE) {
+            result->as.attribute.isDerived   = mods.isDerived;
+            result->as.attribute.isAbstract  = mods.isAbstract;
+            result->as.attribute.isConstant  = mods.isConstant;
+            result->as.attribute.isReference = mods.isReference;
+        }
     } else {
+        /* Bare-ref form (§8.3.6.3 ReferenceUsage): `ref name : T = expr;`
+         * with no kind keyword.  We get here when parseFeatureModifiers
+         * consumed `ref`, none of the kind keywords matched, and the
+         * next token is the usage's name.                              */
+        if (mods.isReference && check(TOKEN_IDENTIFIER)) {
+            Node* u = usage(&kReference, dir);
+            if (u && u->kind == NODE_USAGE) {
+                u->as.usage.isDerived   = mods.isDerived;
+                u->as.usage.isAbstract  = mods.isAbstract;
+                u->as.usage.isConstant  = mods.isConstant;
+                u->as.usage.isReference = true;
+            }
+            astSetVisibility(u, vis);
+            return u;
+        }
+
         if (vis != VIS_DEFAULT) {
             errorAtCurrent("Visibility modifier must be followed by a declaration.");
         } else if (dir != DIR_NONE) {
             errorAtCurrent("Direction modifier must be followed by a declaration.");
+        } else if (hasAnyModifier(mods)) {
+            errorAtCurrent("Feature modifier must be followed by a declaration.");
         } else {
             errorAtCurrent("Expected declaration.");
         }

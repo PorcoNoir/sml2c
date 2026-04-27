@@ -4,6 +4,7 @@
  *   ./sysmlc file.sysml               same, on a file
  *   ./sysmlc --tokens [file]          just dump the token stream
  *   ./sysmlc --emit-json [file]       emit AST as JSON instead of pretty-printed tree
+ *   ./sysmlc --emit-sysml [file]      emit canonical SysML (round-trip)
  *   ./sysmlc --no-resolve [file]      skip resolver and later passes
  *   ./sysmlc --no-typecheck [file]    skip typechecker and later passes
  *   ./sysmlc --no-redefcheck [file]   skip redefinition checker
@@ -19,7 +20,9 @@
 #include "typechecker.h"
 #include "redefchecker.h"
 #include "connectchecker.h"
+#include "referentialchecker.h"
 #include "codegen_json.h"
+#include "codegen_sysml.h"
 
 static const char* SAMPLE =
     "package MBSEPodcast {\n"
@@ -67,18 +70,22 @@ static void dumpTokens(const char* source) {
 int main(int argc, char** argv) {
     bool tokensOnly = false;
     bool emitJsonMode = false;
+    bool emitSysmlMode = false;
     bool skipResolve = false;
     bool skipTypecheck = false;
     bool skipRedefcheck = false;
     bool skipConnectcheck = false;
+    bool skipRefcheck = false;
     const char* path = NULL;
     for (int i = 1; i < argc; i++) {
         if      (strcmp(argv[i], "--tokens")          == 0) tokensOnly       = true;
         else if (strcmp(argv[i], "--emit-json")       == 0) emitJsonMode     = true;
+        else if (strcmp(argv[i], "--emit-sysml")      == 0) emitSysmlMode    = true;
         else if (strcmp(argv[i], "--no-resolve")      == 0) skipResolve      = true;
         else if (strcmp(argv[i], "--no-typecheck")    == 0) skipTypecheck    = true;
         else if (strcmp(argv[i], "--no-redefcheck")   == 0) skipRedefcheck   = true;
         else if (strcmp(argv[i], "--no-connectcheck") == 0) skipConnectcheck = true;
+        else if (strcmp(argv[i], "--no-refcheck")     == 0) skipRefcheck     = true;
         else                                                path = argv[i];
     }
 
@@ -105,10 +112,12 @@ int main(int argc, char** argv) {
         if (!skipTypecheck    && !typecheckProgram(root))   { free(allocated); return 65; }
         if (!skipRedefcheck   && !checkRedefinitions(root)) { free(allocated); return 65; }
         if (!skipConnectcheck && !checkConnections(root))   { free(allocated); return 65; }
+        if (!skipRefcheck     && !checkReferential(root))   { free(allocated); return 65; }
     }
 
-    if (emitJsonMode) emitJson(stdout, root);
-    else              astPrint(root);
+    if      (emitSysmlMode) emitSysml(stdout, root);
+    else if (emitJsonMode)  emitJson(stdout, root);
+    else                    astPrint(root);
 
     free(allocated);
     return 0;

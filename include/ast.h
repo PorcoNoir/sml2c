@@ -24,15 +24,18 @@ typedef enum {
     NODE_PROGRAM,         /* top-level container, never written by user */
     NODE_PACKAGE,         /* package Foo { ... }                         */
     NODE_IMPORT,          /* import A::B::C; or import A::B::*;          */
-    NODE_DEFINITION,      /* part/port/interface/item/connection/flow def Name { ... } */
-    NODE_USAGE,           /* part/port/interface/item/connection/flow name : Type [...] */
+    NODE_DEFINITION,      /* part/port/interface/item/connection/flow/enum def Name { ... } */
+    NODE_USAGE,           /* part/port/interface/item/connection/flow/enum name : Type [...] */
     NODE_ATTRIBUTE,       /* attribute name : Type;                      */
     NODE_QUALIFIED_NAME,  /* A::B::C  (used as a type ref or import tgt) */
     NODE_MULTIPLICITY,    /* [n], [lo..hi], [*], [lo..*]                 */
     NODE_DOC,             /* doc keyword form, or slash-star-star form */
     NODE_LITERAL,         /* numeric/string/bool literal in an expression */
     NODE_BINARY,          /* left op right (+, -, *, /, ==, !=, <, ...)   */
-    NODE_UNARY            /* prefix - or !                                */
+    NODE_UNARY,           /* prefix - or !                                */
+    NODE_ALIAS,           /* alias Name for A::B::C;                      */
+    NODE_COMMENT,         /* comment [Name] [about Refs] {block-comment-body} */
+    NODE_DEPENDENCY       /* dependency [Name] from A,B to C,D;           */
 } NodeKind;
 
 /* Which flavor of literal a NODE_LITERAL holds.  String literals don't
@@ -55,7 +58,10 @@ typedef enum {
     DEF_ITEM,
     DEF_CONNECTION,
     DEF_FLOW,
-    DEF_END                /* `end name : Type;` inside a connection/flow def */
+    DEF_END,                /* `end name : Type;` inside a connection/flow def */
+    DEF_DATATYPE,           /* synthetic — only the built-in stdlib uses this */
+    DEF_ENUM,               /* `enum def Color { red; green; ... }` and its values */
+    DEF_REFERENCE           /* bare `ref name : T;` — kindless ReferenceUsage */
 } DefKind;
 
 /* Port direction modifier.  Currently only port usages can carry one,
@@ -101,6 +107,7 @@ struct Node {
             Token      name;        /* unused for PROGRAM                */
             Visibility visibility;
             DefKind    defKind;
+            bool       isAbstract;  /* `abstract part def Vehicle { ... }` */
             Node**     members;
             int        memberCount;
             int        memberCapacity;
@@ -116,10 +123,15 @@ struct Node {
             Visibility visibility;
             DefKind    defKind;
             Direction  direction;   /* in/out/inout (port usages mostly)  */
+            bool       isDerived;   /* RefPrefix:  `derived`              */
+            bool       isAbstract;  /* RefPrefix:  `abstract`             */
+            bool       isConstant;  /* RefPrefix:  `constant`             */
+            bool       isReference; /* BasicUsagePrefix: `ref`            */
             NodeList   types;       /* `: A, B`                           */
             NodeList   specializes; /* `:> X, Y`                          */
             NodeList   redefines;   /* `:>> P, Q`                         */
             Node*      multiplicity;/* `[...]`  NULL if not specified     */
+            Node*      defaultValue;/* `= expr`  NULL if not specified    */
             NodeList   ends;        /* connector/flow endpoints (2 elts)  */
             Node**     members;     /* NULL if no `{ ... }`               */
             int        memberCount;
@@ -130,6 +142,10 @@ struct Node {
         struct {
             Token      name;
             Visibility visibility;
+            bool       isDerived;   /* `derived attribute area = ...;`   */
+            bool       isAbstract;  /* `abstract attribute ...`          */
+            bool       isConstant;  /* `constant attribute pi = 3.14;`   */
+            bool       isReference; /* `ref attribute ...`               */
             NodeList   types;       /* `: A, B`                          */
             NodeList   specializes; /* `:> X, Y`                         */
             NodeList   redefines;   /* `:>> P, Q`                        */
@@ -152,12 +168,26 @@ struct Node {
          * either "the resolver hasn't run yet" or "the name was tentatively
          * accepted as deferred (e.g. brought in by a wildcard import we
          * don't actually load yet)".  An undefined name produces an error
-         * during resolution; it does not leave a NULL `resolved`. */
+         * during resolution; it does not leave a NULL `resolved`.
+         *
+         * `isConjugated` is set when the qualified name was prefixed with
+         * `~` (port conjugation, §8.3.12.3-4).  The flag flows through
+         * to consumers — connection-end direction-checking flips when
+         * the port reference reached its definition through a conjugated
+         * type ref.
+         *
+         * `conjugationParity` is computed by the resolver as it walks
+         * a multi-segment chain: each hop through a conjugated type
+         * ref toggles the parity.  Consumers (notably the connection
+         * checker's flow-direction rule) read this to decide whether
+         * the resolved port's effective direction is flipped.       */
         struct {
             Token*      parts;
             int         partCount;
             int         partCapacity;
             const Node* resolved;
+            bool        isConjugated;
+            bool        conjugationParity;
         } qualifiedName;
 
         /* MULTIPLICITY — `[n]`, `[lo..hi]`, `[*]`, `[lo..*]`.
@@ -211,6 +241,35 @@ struct Node {
             Token op;
             Node* operand;
         } unary;
+
+        /* ALIAS — `alias Name for A::B::C;`
+         * Creates an additional name in the current namespace that
+         * refers to the same Element as `target` resolves to. */
+        struct {
+            Token      name;          /* the alias name introduced     */
+            Visibility visibility;
+            Node*      target;        /* a NODE_QUALIFIED_NAME         */
+        } alias;
+
+        /* COMMENT — `comment [Name] [about RefList] {block-body}`
+         * The keyword form of a Comment annotating namespace elements
+         * (clause 8.3.4).  Name is optional (length==0 if absent);
+         * the about-list is optional (count==0 if absent).            */
+        struct {
+            Token      name;          /* length==0 if no name          */
+            NodeList   about;         /* qualifiedNames; count==0 = no about clause */
+            Token      body;          /* block-comment contents (delims stripped) */
+        } comment;
+
+        /* DEPENDENCY — `dependency [Name] from A,B to C,D;`
+         * A directed relationship from a list of source elements to
+         * a list of target elements (clause 8.3.3).  Name optional. */
+        struct {
+            Token      name;          /* length==0 if no name          */
+            Visibility visibility;
+            NodeList   sources;       /* qualifiedNames after `from`   */
+            NodeList   targets;       /* qualifiedNames after `to`     */
+        } dependency;
     } as;
 };
 

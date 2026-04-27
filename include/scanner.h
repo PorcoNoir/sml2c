@@ -51,12 +51,21 @@ typedef enum {
     TOKEN_DEF,
     TOKEN_ATTRIBUTE,
     TOKEN_REF,
+    TOKEN_ABSTRACT,
+    TOKEN_DERIVED,
+    TOKEN_CONSTANT,
     TOKEN_SPECIALIZES,
     TOKEN_REDEFINES,
     TOKEN_PUBLIC,
     TOKEN_PRIVATE,
     TOKEN_PROTECTED,
     TOKEN_DOC,
+    TOKEN_COMMENT_KW,
+    TOKEN_ABOUT,
+    TOKEN_ALIAS,
+    TOKEN_FOR,
+    TOKEN_DEPENDENCY,
+    TOKEN_ENUM,
     TOKEN_IN,
     TOKEN_OUT,
     TOKEN_INOUT,
@@ -87,6 +96,15 @@ Token scanToken(void);
  * the delimiters are stripped, and the inner content is returned
  * as TOKEN_DOC_BODY.  If no slash-star appears, TOKEN_ERROR. */
 Token scanDocBody(void);
+
+/* Returns the most-recently-skipped slash-star block-comment body,
+ * with delimiters stripped.  type==TOKEN_DOC_BODY when valid, type==0
+ * when no block comment was skipped immediately before the current
+ * scanner position.  The slot is cleared on each token fetch (start
+ * of every scanToken/skipWhitespace pass), and overwritten when a new
+ * block is consumed.  Reading takes ownership: subsequent reads
+ * return empty until the next block comment is skipped. */
+Token takeLastBlockComment(void);
 
 /* Pretty name for debugging / test harness. */
 const char* tokenTypeName(TokenType type);

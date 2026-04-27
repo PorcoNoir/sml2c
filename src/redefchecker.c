@@ -40,6 +40,23 @@ static void redefError(int line, const char* fmt, ...) {
 
 /* ---- small AST helpers ----------------------------------------- */
 
+static bool tokensEqual(Token a, Token b) {
+    if (a.length != b.length) return false;
+    return memcmp(a.start, b.start, (size_t)a.length) == 0;
+}
+
+static Token nodeName(const Node* n) {
+    static const Token empty = {0};
+    if (!n) return empty;
+    switch (n->kind) {
+    case NODE_PACKAGE:
+    case NODE_DEFINITION: return n->as.scope.name;
+    case NODE_USAGE:      return n->as.usage.name;
+    case NODE_ATTRIBUTE:  return n->as.attribute.name;
+    default:              return empty;
+    }
+}
+
 /* ---- supertype search ------------------------------------------ */
 
 /* For a feature inside `owner`, look up `name` in owner's strict
@@ -104,39 +121,100 @@ static const char* nameLexeme(Token t, char* buf, size_t bufsize) {
     return buf;
 }
 
+/* Walk a list of supertype references, recursing transitively.  Return
+ * true if some ancestor in the chain is named `qualifier` AND has
+ * `name` reaching `target` via lookupMember.  Used to verify that a
+ * multi-segment redef target like `Q::name` actually walks through
+ * `Q` to reach the resolved member.                                 */
+static bool walkAndMatchQualifier(const NodeList* list, Token qualifier,
+                                  Token name, const Node* target, int depth) {
+    if (depth >= 32) return false;
+    for (int i = 0; i < list->count; i++) {
+        const Node* ref = list->items[i];
+        if (!ref || ref->kind != NODE_QUALIFIED_NAME) continue;
+        const Node* ancestor = ref->as.qualifiedName.resolved;
+        if (!ancestor) continue;
+
+        Token aName = nodeName(ancestor);
+        if (aName.length > 0 && tokensEqual(aName, qualifier)) {
+            const Node* found = lookupMember(ancestor, name);
+            if (found == target) return true;
+        }
+
+        /* Recurse into the ancestor's own supertypes/types. */
+        if (ancestor->kind == NODE_DEFINITION) {
+            if (walkAndMatchQualifier(&ancestor->as.scope.specializes,
+                                      qualifier, name, target, depth + 1))
+                return true;
+        } else if (ancestor->kind == NODE_USAGE) {
+            if (walkAndMatchQualifier(&ancestor->as.usage.types,
+                                      qualifier, name, target, depth + 1))
+                return true;
+            if (walkAndMatchQualifier(&ancestor->as.usage.specializes,
+                                      qualifier, name, target, depth + 1))
+                return true;
+        }
+    }
+    return false;
+}
+
+/* Top-level entry: does `target` (named `name`) lie in a supertype
+ * of `owner` accessible via the named `qualifier`?                  */
+static bool qualifierMatches(const Node* owner, Token qualifier,
+                             Token name, const Node* target) {
+    if (!owner) return false;
+    if (owner->kind == NODE_DEFINITION) {
+        return walkAndMatchQualifier(&owner->as.scope.specializes,
+                                     qualifier, name, target, 0);
+    }
+    if (owner->kind == NODE_USAGE) {
+        if (walkAndMatchQualifier(&owner->as.usage.types,
+                                  qualifier, name, target, 0)) return true;
+        return walkAndMatchQualifier(&owner->as.usage.specializes,
+                                     qualifier, name, target, 0);
+    }
+    return false;
+}
+
 /* Check one redefines target against the enclosing owner's supertypes. */
 static void checkOneRedef(Node* targetQname, const Node* owner, const Node* redefiningAttr) {
     if (!targetQname || targetQname->kind != NODE_QUALIFIED_NAME) return;
     int n = targetQname->as.qualifiedName.partCount;
     if (n == 0) return;
 
-    /* The label used in error messages — last segment for multi-segment
-     * forms, the only segment for single-segment.                      */
+    /* Last segment is always the redef name; earlier segments form
+     * the qualifier path. */
     Token displayName = targetQname->as.qualifiedName.parts[n - 1];
     char nameBuf[128];
     nameLexeme(displayName, nameBuf, sizeof nameBuf);
 
-    const Node* found = NULL;
+    const Node* found = findInSupertypes(owner, displayName);
+    if (!found) {
+        redefError(targetQname->line,
+                   "Cannot redefine '%s': no such feature in any supertype.",
+                   nameBuf);
+        return;
+    }
 
-    if (n == 1) {
-        /* Single-segment: supertype walk.  This is what `:>> torque`
-         * means — find an inherited feature with that name.            */
-        found = findInSupertypes(owner, displayName);
-        if (!found) {
+    /* Qualifier-prefix validation: for `Q::name`, verify that `Q` is
+     * an ancestor through which `name` reaches `found`.  Currently
+     * handles single-qualifier (n==2); deeper paths are accepted
+     * tentatively as we don't yet validate full nested qualifiers. */
+    if (n == 2) {
+        Token qualifier = targetQname->as.qualifiedName.parts[0];
+        if (!qualifierMatches(owner, qualifier, displayName, found)) {
+            char qualBuf[128];
+            nameLexeme(qualifier, qualBuf, sizeof qualBuf);
             redefError(targetQname->line,
-                       "Cannot redefine '%s': no such feature in any supertype.",
-                       nameBuf);
+                       "Cannot redefine '%s::%s': '%s' is not a supertype "
+                       "from which '%s' is reachable.",
+                       qualBuf, nameBuf, qualBuf, nameBuf);
             return;
         }
-        targetQname->as.qualifiedName.resolved = found;
-    } else {
-        /* Multi-segment: the resolver already pre-resolved this via
-         * lookupMember.  If resolution succeeded we use it; if it
-         * failed, the resolver already reported a focused error
-         * ("'X' has no member 'Y'") so we stay silent here.            */
-        found = targetQname->as.qualifiedName.resolved;
-        if (!found) return;
     }
+
+    /* Stamp the resolution. */
+    targetQname->as.qualifiedName.resolved = found;
 
     /* The redefined target must be a feature — attribute or usage.
      * Datatype/part definitions are specialized via :>, not redefined. */
@@ -156,12 +234,17 @@ static void checkOneRedef(Node* targetQname, const Node* owner, const Node* rede
         return;
     }
 
-    /* Type compatibility — narrowing only.  If either side has no
-     * declared type, skip (the redefining attribute may be inheriting
-     * its type from the redefined target, which is allowed). */
+    /* Type compatibility — narrowing only.  Skipped when either side
+     * has no declared type (the redefining feature may inherit its
+     * type from the redefined target).
+     *
+     * Multi-qualifier paths (n > 2) skip the compat check because the
+     * full path isn't yet validated. */
+    bool fullyValidated = (n <= 2);
     const Node* redefType = declaredType(redefiningAttr);
     const Node* targetType = declaredType(found);
-    if (redefType && targetType && !specializesType(redefType, targetType)) {
+    if (fullyValidated && redefType && targetType
+            && !specializesType(redefType, targetType)) {
         char redefBuf[128], targetBuf[128];
         nameLexeme(redefType->as.scope.name, redefBuf, sizeof redefBuf);
         nameLexeme(targetType->as.scope.name, targetBuf, sizeof targetBuf);

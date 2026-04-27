@@ -144,6 +144,9 @@ static Token nodeName(const Node* n) {
     case NODE_DEFINITION: return n->as.scope.name;
     case NODE_USAGE:      return n->as.usage.name;
     case NODE_ATTRIBUTE:  return n->as.attribute.name;
+    case NODE_ALIAS:      return n->as.alias.name;
+    case NODE_COMMENT:    return n->as.comment.name;     /* may be empty */
+    case NODE_DEPENDENCY: return n->as.dependency.name;  /* may be empty */
     default:              return empty;
     }
 }
@@ -207,6 +210,30 @@ static void declareMembers(Scope* inner, Node** members, int count) {
  *
  * Cycles in the inheritance graph are defanged with a depth bound. */
 
+/* ---- alias dereferencing ---------------------------------------- *
+ *
+ * An alias ("alias E for AliasDemo::Engine;") binds a name to a
+ * qualified-name reference.  Once that reference is resolved, the
+ * alias is functionally a synonym for whatever it targets — every
+ * later use of the alias name should "see through" to the real node.
+ *
+ * We dereference at the lookup boundary rather than eagerly rewriting
+ * the AST: the alias node itself stays in the tree (so the printer
+ * and JSON emitter can render it), but resolution always returns the
+ * underlying target.                                               */
+static const Node* derefAlias(const Node* n) {
+    int depth = 0;
+    while (n && n->kind == NODE_ALIAS && depth < 32) {
+        if (!n->as.alias.target) return NULL;
+        if (n->as.alias.target->kind != NODE_QUALIFIED_NAME) return NULL;
+        const Node* next = n->as.alias.target->as.qualifiedName.resolved;
+        if (!next) return NULL;     /* alias target unresolved — give up */
+        n = next;
+        depth++;
+    }
+    return n;
+}
+
 static const Node* lookupMemberDepth(const Node* container, Token name, int depth);
 
 /* Walk a list of supertype/type references, calling lookupMemberDepth
@@ -226,6 +253,12 @@ static const Node* searchInheritedMembers(const NodeList* list, Token name, int 
 
 static const Node* lookupMemberDepth(const Node* container, Token name, int depth) {
     if (!container || depth >= 32) return NULL;
+
+    /* If `container` is itself an alias, follow it to the real target
+     * before searching members.  This makes `E::torque` work for
+     * `alias E for Engine`. */
+    container = derefAlias(container);
+    if (!container) return NULL;
 
     /* Step 1 — look at the container's own direct members, if any. */
     Node** members = NULL;
@@ -348,6 +381,12 @@ static void resolveQualifiedNameImpl(Node* qname, Scope* current, bool report) {
         node = member;
     }
 
+    /* Final dereference: if the resolved node is an alias, follow it
+     * to the underlying target.  This ensures every consumer of the
+     * resolution sees the real declaration, not the alias.           */
+    const Node* deref = derefAlias(node);
+    if (deref) node = deref;
+
     qname->as.qualifiedName.resolved = node;
 }
 
@@ -454,6 +493,7 @@ static void resolveNode(Node* n, Scope* current) {
         resolveNodeList(&n->as.usage.specializes, current);
         resolveMultiSegmentRedefs(&n->as.usage.redefines, current);
         resolveNodeList(&n->as.usage.ends,        current);
+        resolveExpression(n->as.usage.defaultValue, current);
 
         if (n->as.usage.memberCount > 0) {
             Scope inner = { .parent = current, .what = "usage" };
@@ -473,6 +513,27 @@ static void resolveNode(Node* n, Scope* current) {
 
     case NODE_IMPORT:
         /* Already handled by the parent's declareMembers pre-pass. */
+        break;
+
+    case NODE_ALIAS:
+        /* An alias's target is a qname interpreted in the alias's
+         * enclosing scope.  Resolving here also feeds the
+         * derefAlias() chain followed at every later use site. */
+        resolveQualifiedName(n->as.alias.target, current);
+        break;
+
+    case NODE_COMMENT:
+        /* `comment about A, B` — each `about` target is resolved
+         * normally.  An anonymous untargeted comment has nothing
+         * to resolve. */
+        resolveNodeList(&n->as.comment.about, current);
+        break;
+
+    case NODE_DEPENDENCY:
+        /* Both source and target lists hold qualified-name refs in
+         * the dependency's enclosing scope. */
+        resolveNodeList(&n->as.dependency.sources, current);
+        resolveNodeList(&n->as.dependency.targets, current);
         break;
 
     /* Leaves — no inner refs to resolve. */
