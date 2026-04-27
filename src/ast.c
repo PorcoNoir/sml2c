@@ -164,6 +164,60 @@ static void emitEnds(DefKind k, const NodeList* ends) {
     }
 }
 
+/* Map an operator token type to its source-form symbol.  Used by
+ * emitExpression so the printer doesn't have to thread the lexeme
+ * through (the operator's identity is known statically from its
+ * type). */
+static const char* operatorSymbol(TokenType t) {
+    switch (t) {
+    case TOKEN_PLUS:           return "+";
+    case TOKEN_MINUS:          return "-";
+    case TOKEN_STAR:           return "*";
+    case TOKEN_SLASH:          return "/";
+    case TOKEN_BANG:           return "!";
+    case TOKEN_EQUAL_EQUAL:    return "==";
+    case TOKEN_BANG_EQUAL:     return "!=";
+    case TOKEN_LESS:           return "<";
+    case TOKEN_LESS_EQUAL:     return "<=";
+    case TOKEN_GREATER:        return ">";
+    case TOKEN_GREATER_EQUAL:  return ">=";
+    default:                   return "?";
+    }
+}
+
+/* Pretty-print an expression inline.  Binary and unary nodes are
+ * surrounded by parens so the output makes the parse tree's shape
+ * unambiguous — useful for verifying that precedence is correct.
+ * Identifiers reuse the qualified-name printer.                    */
+static void emitExpression(const Node* e) {
+    if (!e) { printf("(null)"); return; }
+    switch (e->kind) {
+    case NODE_LITERAL:
+        /* String literals carry their surrounding quotes in the lexeme;
+         * everything else (ints, reals, true, false) is printed as-is. */
+        emitToken(e->as.literal.token);
+        break;
+    case NODE_QUALIFIED_NAME:
+        emitQualifiedName(e);
+        break;
+    case NODE_BINARY:
+        printf("(");
+        emitExpression(e->as.binary.left);
+        printf(" %s ", operatorSymbol(e->as.binary.op.type));
+        emitExpression(e->as.binary.right);
+        printf(")");
+        break;
+    case NODE_UNARY:
+        printf("(%s", operatorSymbol(e->as.unary.op.type));
+        emitExpression(e->as.unary.operand);
+        printf(")");
+        break;
+    default:
+        printf("?");
+        break;
+    }
+}
+
 static void printNode(const Node* n, int depth) {
     if (!n) { emitIndent(depth); printf("(null)\n"); return; }
     emitIndent(depth);
@@ -218,6 +272,10 @@ static void printNode(const Node* n, int depth) {
         emitNameList(" :> ",  &n->as.attribute.specializes);
         emitNameList(" :>> ", &n->as.attribute.redefines);
         emitMultiplicity(n->as.attribute.multiplicity);
+        if (n->as.attribute.defaultValue) {
+            printf(" = ");
+            emitExpression(n->as.attribute.defaultValue);
+        }
         printf("\n");
         break;
 
@@ -255,6 +313,18 @@ static void printNode(const Node* n, int depth) {
                (nl < end) ? " ..." : "");
         break;
     }
+
+    /* The three expression kinds are normally embedded inside another
+     * node (an attribute's default value, eventually a multiplicity
+     * bound, etc.) and rendered there via emitExpression.  These cases
+     * keep the switch exhaustive — they only fire when astPrint is
+     * called on a bare expression, which we currently don't do.       */
+    case NODE_LITERAL:
+    case NODE_BINARY:
+    case NODE_UNARY:
+        emitExpression(n);
+        printf("\n");
+        break;
     }
 }
 

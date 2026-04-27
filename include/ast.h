@@ -29,8 +29,20 @@ typedef enum {
     NODE_ATTRIBUTE,       /* attribute name : Type;                      */
     NODE_QUALIFIED_NAME,  /* A::B::C  (used as a type ref or import tgt) */
     NODE_MULTIPLICITY,    /* [n], [lo..hi], [*], [lo..*]                 */
-    NODE_DOC              /* doc keyword form, or slash-star-star form */
+    NODE_DOC,             /* doc keyword form, or slash-star-star form */
+    NODE_LITERAL,         /* numeric/string/bool literal in an expression */
+    NODE_BINARY,          /* left op right (+, -, *, /, ==, !=, <, ...)   */
+    NODE_UNARY            /* prefix - or !                                */
 } NodeKind;
+
+/* Which flavor of literal a NODE_LITERAL holds.  String literals don't
+ * need a parsed value field — the token's lexeme serves directly. */
+typedef enum {
+    LIT_INT  = 0,
+    LIT_REAL,
+    LIT_STRING,
+    LIT_BOOL
+} LiteralKind;
 
 /* Which family a definition or usage belongs to.  All six kinds share
  * the same surface grammar (`<keyword> def Name {…}` and `<keyword> name
@@ -122,6 +134,7 @@ struct Node {
             NodeList   specializes; /* `:> X, Y`                         */
             NodeList   redefines;   /* `:>> P, Q`                        */
             Node*      multiplicity;/* `[...]`  NULL if not specified    */
+            Node*      defaultValue;/* `= expr`  NULL if not specified   */
         } attribute;
 
         /* IMPORT — points to a QUALIFIED_NAME, plus a wildcard flag.    */
@@ -161,6 +174,34 @@ struct Node {
         struct {
             Token body;
         } doc;
+
+        /* LITERAL — numeric/string/bool.  The token holds the lexeme
+         * and source line; the value union holds the parsed scalar
+         * (string literals read directly from the token).            */
+        struct {
+            Token       token;
+            LiteralKind litKind;
+            union {
+                long long iv;
+                double    rv;
+                bool      bv;
+            } value;
+        } literal;
+
+        /* BINARY — left op right.  The op token records both the
+         * operator type (TOKEN_PLUS, TOKEN_STAR, ...) and its source
+         * location.                                                 */
+        struct {
+            Token op;
+            Node* left;
+            Node* right;
+        } binary;
+
+        /* UNARY — prefix `-` or `!` applied to an operand.          */
+        struct {
+            Token op;
+            Node* operand;
+        } unary;
     } as;
 };
 
