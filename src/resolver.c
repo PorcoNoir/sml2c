@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "resolver.h"
+#include "builtin.h"
 
 /* ---- module-level error counter --------------------------------- */
 
@@ -83,13 +84,6 @@ static const Node* lookupChain(const Scope* scope, Token name) {
     return NULL;
 }
 
-static bool anyWildcardInScope(const Scope* scope) {
-    for (const Scope* s = scope; s; s = s->parent) {
-        if (s->wildcardImports.count > 0) return true;
-    }
-    return false;
-}
-
 /* Anonymous decls (length-zero name tokens) are silently skipped —
  * standalone `connect a to b;` and similar produce nameless usages. */
 static void declareName(Scope* scope, Token name, const Node* decl) {
@@ -138,22 +132,9 @@ static Token nodeName(const Node* n) {
 }
 
 /* Phase-1 pre-pass: walk a member array and declare every named
- * member in the inner scope.  Imports update wildcardImports. */
-static void declareMembers(Scope* inner, Node** members, int count) {
-    for (int i = 0; i < count; i++) {
-        Node* m = members[i];
-        if (m->kind == NODE_IMPORT) {
-            if (m->as.import.wildcard) {
-                astListAppend(&inner->wildcardImports, m);
-            }
-            /* Non-wildcard imports would bring the trailing segment
-             * into scope; deferred until we have a library loader. */
-            continue;
-        }
-        Token name = nodeName(m);
-        if (name.length > 0) declareName(inner, name, m);
-    }
-}
+ * member in the inner scope.  Imports update wildcardImports and
+ * eagerly resolve their target so wildcard search works. */
+static void declareMembers(Scope* inner, Node** members, int count);
 
 /* ---- forward declarations --------------------------------------- */
 
@@ -162,28 +143,109 @@ static void resolveQualifiedName(Node* qname, Scope* current);
 static void resolveExpression(Node* expr, Scope* current);
 static void resolveNodeList(NodeList* list, Scope* current);
 
+/* Variant that doesn't report errors on failure — used for import
+ * targets, where we tolerate "unknown library" and just leave the
+ * resolution NULL.                                                  */
+static void tryResolveQualifiedName(Node* qname, Scope* current);
+
+/* ---- declareMembers (defined here so it can call try-resolve) --- */
+
+static void declareMembers(Scope* inner, Node** members, int count) {
+    for (int i = 0; i < count; i++) {
+        Node* m = members[i];
+        if (m->kind == NODE_IMPORT) {
+            /* Resolve the target package now, against the OUTER scope:
+             * import targets refer to siblings of our containing
+             * scope, not to anything inside us.                       */
+            if (m->as.import.target) {
+                Scope* outer = inner->parent ? inner->parent : inner;
+                tryResolveQualifiedName(m->as.import.target, outer);
+            }
+            if (m->as.import.wildcard) {
+                astListAppend(&inner->wildcardImports, m);
+            }
+            /* Non-wildcard imports would bring the trailing segment
+             * into scope; deferred until we add aliasing support. */
+            continue;
+        }
+        Token name = nodeName(m);
+        if (name.length > 0) declareName(inner, name, m);
+    }
+}
+
+/* ---- wildcard import search ------------------------------------- */
+
+/* Look up `name` in any wildcard-imported package whose target was
+ * successfully resolved.  Returns the matching member or NULL.    */
+static const Node* searchWildcardImports(const Scope* scope, Token name) {
+    for (const Scope* s = scope; s; s = s->parent) {
+        for (int i = 0; i < s->wildcardImports.count; i++) {
+            const Node* imp = s->wildcardImports.items[i];
+            if (!imp || !imp->as.import.target) continue;
+            const Node* target = imp->as.import.target->as.qualifiedName.resolved;
+            if (!target || target->kind != NODE_PACKAGE) continue;
+            for (int j = 0; j < target->as.scope.memberCount; j++) {
+                Node* mem = target->as.scope.members[j];
+                Token memName = nodeName(mem);
+                if (memName.length > 0 && tokensEqual(memName, name)) {
+                    return mem;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* True if any wildcard import in the scope chain has an UNRESOLVED
+ * target — meaning we don't know what symbols it brings in, so we
+ * should be permissive about names that might come from there.    */
+static bool anyUnresolvedWildcardInScope(const Scope* scope) {
+    for (const Scope* s = scope; s; s = s->parent) {
+        for (int i = 0; i < s->wildcardImports.count; i++) {
+            const Node* imp = s->wildcardImports.items[i];
+            if (!imp || !imp->as.import.target) continue;
+            if (!imp->as.import.target->as.qualifiedName.resolved) return true;
+        }
+    }
+    return false;
+}
+
 /* ---- resolution drivers ----------------------------------------- */
 
-static void resolveQualifiedName(Node* qname, Scope* current) {
+static void resolveQualifiedNameImpl(Node* qname, Scope* current, bool report) {
     if (!qname || qname->kind != NODE_QUALIFIED_NAME) return;
     if (qname->as.qualifiedName.partCount == 0) return;
+    /* Idempotent: if someone (the builtin, or a previous pass) already
+     * filled this in, don't clobber. */
+    if (qname->as.qualifiedName.resolved) return;
 
     Token first = qname->as.qualifiedName.parts[0];
-    const Node* found = lookupChain(current, first);
-    if (found) {
-        qname->as.qualifiedName.resolved = found;
-        return;
-    }
 
-    /* Multi-segment names with an unknown first segment may refer to
-     * a top-level package we don't yet load.  Accept tentatively. */
+    /* (1) Walk the scope chain. */
+    const Node* found = lookupChain(current, first);
+    if (found) { qname->as.qualifiedName.resolved = found; return; }
+
+    /* (2) Search wildcard imports. */
+    found = searchWildcardImports(current, first);
+    if (found) { qname->as.qualifiedName.resolved = found; return; }
+
+    /* (3) Multi-segment names whose first segment isn't known may
+     * refer to a top-level package we don't load.  Accept tentatively. */
     if (qname->as.qualifiedName.partCount > 1) return;
 
-    /* Single-segment fallthrough: if any wildcard import is in scope,
-     * the name might come from there.  Accept tentatively. */
-    if (anyWildcardInScope(current)) return;
+    /* (4) If any wildcard import has an UNRESOLVED target, the name
+     * might come from there.  Accept tentatively. */
+    if (anyUnresolvedWildcardInScope(current)) return;
 
-    undefinedNameError(qname->line, first);
+    if (report) undefinedNameError(qname->line, first);
+}
+
+static void resolveQualifiedName(Node* qname, Scope* current) {
+    resolveQualifiedNameImpl(qname, current, true);
+}
+
+static void tryResolveQualifiedName(Node* qname, Scope* current) {
+    resolveQualifiedNameImpl(qname, current, false);
 }
 
 static void resolveNodeList(NodeList* list, Scope* current) {
@@ -298,9 +360,15 @@ bool resolveProgram(Node* program) {
     if (!program) return true;
 
     Scope root = { .parent = NULL, .what = "program" };
-    /* Declare top-level packages (and imports, though they're rare
-     * outside packages) before recursing, so packages can refer to
-     * each other in either source order. */
+
+    /* Inject the synthetic standard library so wildcard imports of
+     * `ScalarValues::*` find real symbols.  We cast away const because
+     * declareName needs a non-const Node* — but we never mutate the
+     * builtin tree afterwards.                                      */
+    Node* stdlib = (Node*)builtinScalarValuesPackage();
+    declareName(&root, stdlib->as.scope.name, stdlib);
+
+    /* Declare user's top-level decls. */
     declareMembers(&root, program->as.scope.members, program->as.scope.memberCount);
     for (int i = 0; i < program->as.scope.memberCount; i++) {
         resolveNode(program->as.scope.members[i], &root);
