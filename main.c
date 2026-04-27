@@ -1,8 +1,9 @@
 /* sysmlc — main.c
  *
- *   ./sysmlc                       parse built-in sample, print AST
- *   ./sysmlc file.sysml            parse file, print AST
- *   ./sysmlc --tokens [file]       just dump the token stream (old behavior)
+ *   ./sysmlc                          parse + resolve, print AST
+ *   ./sysmlc file.sysml               parse + resolve, print AST
+ *   ./sysmlc --tokens [file]          just dump the token stream
+ *   ./sysmlc --no-resolve [file]      skip the resolver pass (debugging)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include "scanner.h"
 #include "parser.h"
 #include "ast.h"
+#include "resolver.h"
 
 static const char* SAMPLE =
     "package MBSEPodcast {\n"
@@ -56,10 +58,12 @@ static void dumpTokens(const char* source) {
 
 int main(int argc, char** argv) {
     bool tokensOnly = false;
+    bool skipResolve = false;
     const char* path = NULL;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--tokens") == 0) tokensOnly = true;
-        else                                  path = argv[i];
+        if      (strcmp(argv[i], "--tokens")     == 0) tokensOnly  = true;
+        else if (strcmp(argv[i], "--no-resolve") == 0) skipResolve = true;
+        else                                           path = argv[i];
     }
 
     char* allocated = NULL;
@@ -79,6 +83,14 @@ int main(int argc, char** argv) {
         free(allocated);
         return 65;
     }
+
+    if (!skipResolve) {
+        if (!resolveProgram(root)) {
+            free(allocated);
+            return 65;
+        }
+    }
+
     astPrint(root);
     free(allocated);
     return 0;

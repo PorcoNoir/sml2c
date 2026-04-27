@@ -144,11 +144,20 @@ struct Node {
             bool       wildcard;
         } import;
 
-        /* QUALIFIED_NAME — array of identifier tokens (A::B::C → 3).    */
+        /* QUALIFIED_NAME — array of identifier tokens (A::B::C → 3).
+         *
+         * `resolved` is filled in by the resolver pass: it points to
+         * the declaration node this reference binds to (a NODE_PACKAGE,
+         * NODE_DEFINITION, NODE_USAGE, or NODE_ATTRIBUTE).  NULL means
+         * either "the resolver hasn't run yet" or "the name was tentatively
+         * accepted as deferred (e.g. brought in by a wildcard import we
+         * don't actually load yet)".  An undefined name produces an error
+         * during resolution; it does not leave a NULL `resolved`. */
         struct {
-            Token* parts;
-            int    partCount;
-            int    partCapacity;
+            Token*      parts;
+            int         partCount;
+            int         partCapacity;
+            const Node* resolved;
         } qualifiedName;
 
         /* MULTIPLICITY — `[n]`, `[lo..hi]`, `[*]`, `[lo..*]`.
