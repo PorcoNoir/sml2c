@@ -109,6 +109,17 @@ void synchronize(void) {
         case TOKEN_ASSUME:
         case TOKEN_REQUIRE:
         case TOKEN_SUBJECT:
+        case TOKEN_ACTION:
+        case TOKEN_SUCCESSION:
+        case TOKEN_FIRST:
+        case TOKEN_THEN:
+        case TOKEN_STATE:
+        case TOKEN_EXHIBIT:
+        case TOKEN_TRANSITION:
+        case TOKEN_ENTRY:
+        case TOKEN_EXIT:
+        case TOKEN_DO:
+        case TOKEN_PERFORM:
         case TOKEN_ABSTRACT:    /* feature modifiers can begin a decl */
         case TOKEN_DERIVED:
         case TOKEN_CONSTANT:

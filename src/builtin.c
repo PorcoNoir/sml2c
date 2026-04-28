@@ -25,6 +25,8 @@ static Node* sInteger = NULL;
 static Node* sBoolean = NULL;
 static Node* sString  = NULL;
 static Node* sPackage = NULL;
+static Node* sStart   = NULL;
+static Node* sDone    = NULL;
 
 /* ---- construction helpers -------------------------------------- */
 
@@ -78,6 +80,17 @@ static void initIfNeeded(void) {
     astAppendScopeMember(sPackage, sInteger);
     astAppendScopeMember(sPackage, sBoolean);
     astAppendScopeMember(sPackage, sString);
+
+    /* Built-in pseudo-actions: `first start;` and `then done;` in any
+     * action def body resolve to these nodes.  Modeled as DEF_ACTION
+     * usages so the typechecker's "succession target must be an action"
+     * rule accepts them uniformly with user-declared actions.        */
+    sStart = astMakeNode(NODE_USAGE, 0);
+    sStart->as.usage.name    = mkTok("start");
+    sStart->as.usage.defKind = DEF_ACTION;
+    sDone = astMakeNode(NODE_USAGE, 0);
+    sDone->as.usage.name    = mkTok("done");
+    sDone->as.usage.defKind = DEF_ACTION;
 }
 
 /* ---- public accessors ------------------------------------------ */
@@ -88,3 +101,5 @@ const Node* builtinReal   (void)              { initIfNeeded(); return sReal;   
 const Node* builtinInteger(void)              { initIfNeeded(); return sInteger; }
 const Node* builtinBoolean(void)              { initIfNeeded(); return sBoolean; }
 const Node* builtinString (void)              { initIfNeeded(); return sString;  }
+const Node* builtinStart  (void)              { initIfNeeded(); return sStart;   }
+const Node* builtinDone   (void)              { initIfNeeded(); return sDone;    }

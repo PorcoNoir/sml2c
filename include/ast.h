@@ -35,7 +35,10 @@ typedef enum {
     NODE_UNARY,           /* prefix - or !                                */
     NODE_ALIAS,           /* alias Name for A::B::C;                      */
     NODE_COMMENT,         /* comment [Name] [about Refs] {block-comment-body} */
-    NODE_DEPENDENCY       /* dependency [Name] from A,B to C,D;           */
+    NODE_DEPENDENCY,      /* dependency [Name] from A,B to C,D;           */
+    NODE_SUCCESSION,      /* succession ['name'] [first ref] (then ref)+  */
+    NODE_TRANSITION,      /* transition [name] [first src] [accept E] [if G] [do A] then T */
+    NODE_LIFECYCLE_ACTION /* entry/do/exit ref;  inside a state body      */
 } NodeKind;
 
 /* Which flavor of literal a NODE_LITERAL holds.  String literals don't
@@ -64,7 +67,9 @@ typedef enum {
     DEF_REFERENCE,          /* bare `ref name : T;` — kindless ReferenceUsage */
     DEF_CONSTRAINT,         /* `constraint def C { … }` / `assert constraint c : C` */
     DEF_REQUIREMENT,        /* `requirement def R { … }` / `require requirement r : R` */
-    DEF_SUBJECT             /* `subject e : Engine;` inside a requirement def */
+    DEF_SUBJECT,            /* `subject e : Engine;` inside a requirement def */
+    DEF_ACTION,             /* `action def A { … }` / `action a : A` */
+    DEF_STATE               /* `state def S { … }` / `state s : S`, `exhibit state s` */
 } DefKind;
 
 /* The `assert` / `assume` / `require` modifier on a constraint or
@@ -78,6 +83,15 @@ typedef enum {
     ASSERT_ASSUME,          /* `assume constraint c : C;` (in requirement) */
     ASSERT_REQUIRE          /* `require constraint c : C;`                 */
 } AssertKind;
+
+/* The kind of lifecycle action attached to a state body — `entry foo;`,
+ * `do bar;`, or `exit baz;`.  Each lifecycle action carries one such
+ * tag plus a reference to the action it triggers.                      */
+typedef enum {
+    LIFECYCLE_ENTRY = 0,
+    LIFECYCLE_DO,
+    LIFECYCLE_EXIT
+} LifecycleKind;
 
 /* Port direction modifier.  Currently only port usages can carry one,
  * but we put it on the usage variant uniformly so the parser doesn't
@@ -156,7 +170,9 @@ struct Node {
             bool       isDerived;   /* RefPrefix:  `derived`              */
             bool       isAbstract;  /* RefPrefix:  `abstract`             */
             bool       isConstant;  /* RefPrefix:  `constant`             */
-            bool       isReference; /* BasicUsagePrefix: `ref`            */
+            bool       isReference; /* BasicUsagePrefix: `ref` (after referential pass) */
+            bool       isReferenceExplicit; /* user wrote `ref` in source           */
+            bool       isPerform;   /* `perform action a : T;`            */
             AssertKind assertKind;  /* assert/assume/require              */
             NodeList   types;       /* `: A, B`                           */
             NodeList   specializes; /* `:> X, Y`                          */
@@ -177,7 +193,8 @@ struct Node {
             bool       isDerived;   /* `derived attribute area = ...;`   */
             bool       isAbstract;  /* `abstract attribute ...`          */
             bool       isConstant;  /* `constant attribute pi = 3.14;`   */
-            bool       isReference; /* `ref attribute ...`               */
+            bool       isReference; /* `ref attribute ...` (after referential pass) */
+            bool       isReferenceExplicit; /* user wrote `ref` in source            */
             NodeList   types;       /* `: A, B`                          */
             NodeList   specializes; /* `:> X, Y`                         */
             NodeList   redefines;   /* `:>> P, Q`                        */
@@ -302,6 +319,53 @@ struct Node {
             NodeList   sources;       /* qualifiedNames after `from`   */
             NodeList   targets;       /* qualifiedNames after `to`     */
         } dependency;
+
+        /* SUCCESSION — `succession [Name] [first src] then dst (then dst)*;`
+         * or the unqualified inline form `first src;` / `then dst;` used
+         * inside an action def body.  Models a chain: each item in
+         * `targets` is preceded by either `first` (if explicit) or by
+         * the previous target in the chain.
+         *
+         * `first` is the explicit predecessor (may be NULL — for inline
+         * `then x;` statements that continue the previous chain).
+         * `targets` holds the chain's (then …) targets in order.  Each
+         * target node is either:
+         *   - a NODE_QUALIFIED_NAME (a name reference, `then loadCargo`)
+         *   - a NODE_USAGE         (an inline declaration, `then action a {…}`)
+         */
+        struct {
+            Token      name;          /* length==0 if anonymous         */
+            Visibility visibility;
+            Node*      first;         /* qname or NULL for continuation */
+            NodeList   targets;       /* qnames or inline action usages */
+        } succession;
+
+        /* TRANSITION — full form:
+         *   transition [Name] [first src] [accept evt] [if guard] [do effect] then tgt;
+         * or the short form (used for `transition initial then off;`):
+         *   transition first src then tgt;
+         *
+         * `first`, `accept`, `effect`, `target` are NODE_QUALIFIED_NAME refs
+         * (the `effect` may carry inline body in a future expansion).
+         * `guard` is an arbitrary expression (NODE_BINARY/UNARY/QUALIFIED_NAME).
+         * Any field may be NULL except `target`, which is required.       */
+        struct {
+            Token      name;          /* length==0 if anonymous          */
+            Visibility visibility;
+            Node*      first;         /* source state ref                */
+            Node*      accept;        /* event ref                       */
+            Node*      guard;         /* boolean expression              */
+            Node*      effect;        /* effect action ref               */
+            Node*      target;        /* target state ref (required)     */
+        } transition;
+
+        /* LIFECYCLE_ACTION — `entry ref;`, `do ref;`, `exit ref;` inside
+         * a state body.  Carries the kind tag plus a single qname ref
+         * to the action invoked.                                        */
+        struct {
+            LifecycleKind kind;
+            Node*         action;     /* qualified-name ref to an action */
+        } lifecycleAction;
     } as;
 };
 

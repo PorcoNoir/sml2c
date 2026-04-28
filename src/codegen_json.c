@@ -101,6 +101,8 @@ static const char* defKindStr(DefKind k) {
     case DEF_CONSTRAINT: return "ConstraintDef";
     case DEF_REQUIREMENT:return "RequirementDef";
     case DEF_SUBJECT:    return "Subject";
+    case DEF_ACTION:     return "ActionDef";
+    case DEF_STATE:      return "StateDef";
     }
     return "?";
 }
@@ -150,6 +152,7 @@ static const char* opSym(TokenType t) {
     case TOKEN_PLUS:           return "+";
     case TOKEN_MINUS:          return "-";
     case TOKEN_STAR:           return "*";
+    case TOKEN_STAR_STAR:      return "**";
     case TOKEN_SLASH:          return "/";
     case TOKEN_BANG:           return "!";
     case TOKEN_EQUAL_EQUAL:    return "==";
@@ -381,6 +384,7 @@ static void emitUsage(J* j, const Node* n) {
     sep(j, &first); emitFieldBool(j, "isAbstract",  n->as.usage.isAbstract);
     sep(j, &first); emitFieldBool(j, "isConstant",  n->as.usage.isConstant);
     sep(j, &first); emitFieldBool(j, "isReference", n->as.usage.isReference);
+    sep(j, &first); emitFieldBool(j, "isPerform",   n->as.usage.isPerform);
     sep(j, &first); emitKey(j, "types");        emitNodeList(j, &n->as.usage.types);
     sep(j, &first); emitKey(j, "specializes");  emitNodeList(j, &n->as.usage.specializes);
     sep(j, &first); emitKey(j, "redefines");    emitNodeList(j, &n->as.usage.redefines);
@@ -461,6 +465,67 @@ static void emitDependency(J* j, const Node* n) {
     j->indent--; newline(j); fputc('}', j->out);
 }
 
+static void emitSuccession(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Succession");
+    sep(j, &first); emitKey(j, "name");
+    if (n->as.succession.name.length > 0) emitToken(j, n->as.succession.name);
+    else                                   fputs("null", j->out);
+    sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.succession.visibility));
+    sep(j, &first); emitKey(j, "first");
+    if (n->as.succession.first) emitNode(j, n->as.succession.first);
+    else                        fputs("null", j->out);
+    sep(j, &first); emitKey(j, "targets"); emitNodeList(j, &n->as.succession.targets);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
+static const char* lifecycleStr(LifecycleKind k) {
+    switch (k) {
+    case LIFECYCLE_ENTRY: return "entry";
+    case LIFECYCLE_DO:    return "do";
+    case LIFECYCLE_EXIT:  return "exit";
+    }
+    return "?";
+}
+
+static void emitTransition(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Transition");
+    sep(j, &first); emitKey(j, "name");
+    if (n->as.transition.name.length > 0) emitToken(j, n->as.transition.name);
+    else                                   fputs("null", j->out);
+    sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.transition.visibility));
+    sep(j, &first); emitKey(j, "first");
+    if (n->as.transition.first) emitNode(j, n->as.transition.first);
+    else                        fputs("null", j->out);
+    sep(j, &first); emitKey(j, "accept");
+    if (n->as.transition.accept) emitNode(j, n->as.transition.accept);
+    else                         fputs("null", j->out);
+    sep(j, &first); emitKey(j, "guard");
+    if (n->as.transition.guard) emitNode(j, n->as.transition.guard);
+    else                        fputs("null", j->out);
+    sep(j, &first); emitKey(j, "effect");
+    if (n->as.transition.effect) emitNode(j, n->as.transition.effect);
+    else                         fputs("null", j->out);
+    sep(j, &first); emitKey(j, "target");
+    if (n->as.transition.target) emitNode(j, n->as.transition.target);
+    else                         fputs("null", j->out);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
+static void emitLifecycleAction(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "LifecycleAction");
+    sep(j, &first); emitFieldStr(j, "lifecycle", lifecycleStr(n->as.lifecycleAction.kind));
+    sep(j, &first); emitKey(j, "action");
+    if (n->as.lifecycleAction.action) emitNode(j, n->as.lifecycleAction.action);
+    else                              fputs("null", j->out);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
 /* Dispatcher. */
 static void emitNode(J* j, const Node* n) {
     if (!n) { fputs("null", j->out); return; }
@@ -480,6 +545,9 @@ static void emitNode(J* j, const Node* n) {
     case NODE_ALIAS:          emitAlias        (j, n); break;
     case NODE_COMMENT:        emitComment      (j, n); break;
     case NODE_DEPENDENCY:     emitDependency   (j, n); break;
+    case NODE_SUCCESSION:     emitSuccession   (j, n); break;
+    case NODE_TRANSITION:     emitTransition   (j, n); break;
+    case NODE_LIFECYCLE_ACTION: emitLifecycleAction(j, n); break;
     }
 }
 

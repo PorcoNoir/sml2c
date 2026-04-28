@@ -39,4 +39,11 @@ const Node* builtinInteger(void);
 const Node* builtinBoolean(void);
 const Node* builtinString(void);
 
+/* Built-in pseudo-actions referenced by `first start;` and `then done;`
+ * in action bodies.  Modeled as DEF_ACTION usages with the appropriate
+ * name; pre-resolved at parse time so they don't go through the
+ * resolver's scope lookups.                                        */
+const Node* builtinStart(void);
+const Node* builtinDone(void);
+
 #endif /* SYSMLC_BUILTIN_H */

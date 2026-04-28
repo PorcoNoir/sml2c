@@ -21,8 +21,11 @@ typedef enum {
     TOKEN_SEMICOLON, TOKEN_COMMA, TOKEN_DOT,       /* ; , . */
     TOKEN_PLUS, TOKEN_MINUS,                       /* + - */
     TOKEN_STAR, TOKEN_SLASH,                       /* * / */
+    TOKEN_STAR_STAR,                               /* ** — recursive-import wildcard / power op */
     TOKEN_BANG,                                    /* ! */
     TOKEN_TILDE,                                   /* ~     port conjugation */
+    TOKEN_AT,                                      /* @     metadata application */
+    TOKEN_HASH,                                    /* #     short-form metadata */
 
     /* Tokens that may be one, two, or three characters --------------- */
     TOKEN_COLON, TOKEN_COLON_COLON,                /* : ::   */
@@ -57,6 +60,7 @@ typedef enum {
     TOKEN_CONSTANT,
     TOKEN_SPECIALIZES,
     TOKEN_REDEFINES,
+    TOKEN_SUBSETS,                                 /* `subsets X` — like :> for usages */
     TOKEN_PUBLIC,
     TOKEN_PRIVATE,
     TOKEN_PROTECTED,
@@ -89,6 +93,40 @@ typedef enum {
      * PREC_AND / PREC_OR.                                              */
     TOKEN_AND,
     TOKEN_OR,
+
+    /* Actions, successions (turn 2 of behavioral expansion).  `start`
+     * and `done` are SysML standard library features; we model them as
+     * keywords producing built-in references rather than expecting the
+     * user to import them.                                            */
+    TOKEN_ACTION,
+    TOKEN_SUCCESSION,
+    TOKEN_FIRST,
+    TOKEN_THEN,
+    TOKEN_START,
+    TOKEN_DONE,
+
+    /* States, transitions (turn 3 of behavioral expansion). The `entry`
+     * / `do` / `exit` lifecycle keywords appear inside state bodies
+     * pointing at action references; `transition` introduces a new
+     * statement form; `accept` / `if` are clauses on transitions.    */
+    TOKEN_STATE,
+    TOKEN_EXHIBIT,
+    TOKEN_TRANSITION,
+    TOKEN_ENTRY,
+    TOKEN_EXIT,
+    TOKEN_DO,
+    TOKEN_ACCEPT,
+    TOKEN_IF,
+
+    /* `perform [action] <ref>;` declares that an enclosing part is
+     * responsible for performing a named action.  Treated as an
+     * action usage with the `isPerform` flag set.                    */
+    TOKEN_PERFORM,
+
+    /* `return [name] [: T] [= expr];` inside calc/action def bodies.
+     * Calc def is a v0.6 feature; for now we just lex the keyword and
+     * the parser swallows the statement.                              */
+    TOKEN_RETURN,
 
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,

@@ -303,6 +303,45 @@ static void resolveNode(Node* n, Scope* current) {
         resolveNodeList(&n->as.dependency.targets, current);
         break;
 
+    case NODE_SUCCESSION: {
+        /* The `first` ref and each qname target resolve in the
+         * enclosing scope.  Inline action declarations (USAGE nodes)
+         * recurse so their own type refs and members are processed.
+         * `start`/`done` arrive pre-resolved by the parser, so the
+         * lookup is a no-op for them — resolveQualifiedName notices
+         * `resolved` is already set and skips the lookup.            */
+        if (n->as.succession.first) {
+            resolveQualifiedName(n->as.succession.first, current);
+        }
+        for (int i = 0; i < n->as.succession.targets.count; i++) {
+            Node* t = n->as.succession.targets.items[i];
+            if (!t) continue;
+            if (t->kind == NODE_QUALIFIED_NAME) {
+                resolveQualifiedName(t, current);
+            } else {
+                resolveNode(t, current);
+            }
+        }
+        break;
+    }
+
+    case NODE_TRANSITION: {
+        /* Each named ref resolves in the enclosing scope.  The guard
+         * (an expression) walks via resolveExpression.                */
+        if (n->as.transition.first)  resolveQualifiedName(n->as.transition.first,  current);
+        if (n->as.transition.accept) resolveQualifiedName(n->as.transition.accept, current);
+        if (n->as.transition.effect) resolveQualifiedName(n->as.transition.effect, current);
+        if (n->as.transition.target) resolveQualifiedName(n->as.transition.target, current);
+        if (n->as.transition.guard)  resolveExpression(n->as.transition.guard,     current);
+        break;
+    }
+
+    case NODE_LIFECYCLE_ACTION:
+        if (n->as.lifecycleAction.action) {
+            resolveQualifiedName(n->as.lifecycleAction.action, current);
+        }
+        break;
+
     /* Leaves — no inner refs to resolve. */
     case NODE_DOC:
     case NODE_QUALIFIED_NAME:

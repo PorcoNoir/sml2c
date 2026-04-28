@@ -157,7 +157,9 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "?ReferenceDef", /* references have no def form              */
         "ConstraintDef",
         "RequirementDef",
-        "?SubjectDef"  /* subjects have no def form; sentinel        */
+        "?SubjectDef",  /* subjects have no def form; sentinel        */
+        "ActionDef",
+        "StateDef"
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
@@ -167,7 +169,9 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "Reference",
         "Constraint",
         "Requirement",
-        "Subject"
+        "Subject",
+        "Action",
+        "State"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -207,6 +211,7 @@ static const char* operatorSymbol(TokenType t) {
     case TOKEN_PLUS:           return "+";
     case TOKEN_MINUS:          return "-";
     case TOKEN_STAR:           return "*";
+    case TOKEN_STAR_STAR:      return "**";
     case TOKEN_SLASH:          return "/";
     case TOKEN_BANG:           return "!";
     case TOKEN_EQUAL_EQUAL:    return "==";
@@ -295,6 +300,7 @@ static void printNode(const Node* n, int depth) {
         emitDirection(n->as.usage.direction);
         emitFeatureModifiers(n->as.usage.isDerived,  n->as.usage.isAbstract,
                              n->as.usage.isConstant, n->as.usage.isReference);
+        if (n->as.usage.isPerform) printf("perform ");
         printf("%s", kindLabel(n->as.usage.defKind, false));
         if (n->as.usage.name.length > 0) {
             printf(" '"); emitToken(n->as.usage.name); printf("'");
@@ -419,6 +425,82 @@ static void printNode(const Node* n, int depth) {
         for (int i = 0; i < n->as.dependency.targets.count; i++) {
             if (i) printf(", ");
             emitQualifiedName(n->as.dependency.targets.items[i]);
+        }
+        printf("\n");
+        break;
+
+    case NODE_SUCCESSION:
+        emitVisibility(n->as.succession.visibility);
+        printf("Succession");
+        if (n->as.succession.name.length > 0) {
+            printf(" '%.*s'",
+                   n->as.succession.name.length, n->as.succession.name.start);
+        }
+        if (n->as.succession.first) {
+            printf(" first ");
+            emitQualifiedName(n->as.succession.first);
+        }
+        for (int i = 0; i < n->as.succession.targets.count; i++) {
+            const Node* t = n->as.succession.targets.items[i];
+            printf(" then ");
+            if (t && t->kind == NODE_QUALIFIED_NAME) {
+                emitQualifiedName(t);
+            } else if (t && t->kind == NODE_USAGE) {
+                /* Inline action declaration. */
+                printf("(action");
+                if (t->as.usage.name.length > 0) {
+                    printf(" '%.*s'", t->as.usage.name.length,
+                                       t->as.usage.name.start);
+                }
+                printf(")");
+            }
+        }
+        printf("\n");
+        /* Print inline declarations as children for inspection. */
+        for (int i = 0; i < n->as.succession.targets.count; i++) {
+            const Node* t = n->as.succession.targets.items[i];
+            if (t && t->kind == NODE_USAGE) {
+                printNode(t, depth + 1);
+            }
+        }
+        break;
+
+    case NODE_TRANSITION:
+        emitVisibility(n->as.transition.visibility);
+        printf("Transition");
+        if (n->as.transition.name.length > 0) {
+            printf(" '%.*s'",
+                   n->as.transition.name.length, n->as.transition.name.start);
+        }
+        if (n->as.transition.first) {
+            printf(" first ");
+            emitQualifiedName(n->as.transition.first);
+        }
+        if (n->as.transition.accept) {
+            printf(" accept ");
+            emitQualifiedName(n->as.transition.accept);
+        }
+        if (n->as.transition.guard) {
+            printf(" if ");
+            emitExpression(n->as.transition.guard);
+        }
+        if (n->as.transition.effect) {
+            printf(" do ");
+            emitQualifiedName(n->as.transition.effect);
+        }
+        printf(" then ");
+        if (n->as.transition.target) emitQualifiedName(n->as.transition.target);
+        printf("\n");
+        break;
+
+    case NODE_LIFECYCLE_ACTION:
+        switch (n->as.lifecycleAction.kind) {
+        case LIFECYCLE_ENTRY: printf("entry "); break;
+        case LIFECYCLE_DO:    printf("do ");    break;
+        case LIFECYCLE_EXIT:  printf("exit ");  break;
+        }
+        if (n->as.lifecycleAction.action) {
+            emitQualifiedName(n->as.lifecycleAction.action);
         }
         printf("\n");
         break;

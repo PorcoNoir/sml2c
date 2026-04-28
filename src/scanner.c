@@ -168,6 +168,7 @@ static TokenType identifierType(void) {
     KW("constant",    TOKEN_CONSTANT);
     KW("specializes", TOKEN_SPECIALIZES);
     KW("redefines",   TOKEN_REDEFINES);
+    KW("subsets",     TOKEN_SUBSETS);
     KW("public",      TOKEN_PUBLIC);
     KW("private",     TOKEN_PRIVATE);
     KW("protected",   TOKEN_PROTECTED);
@@ -195,6 +196,22 @@ static TokenType identifierType(void) {
     KW("subject",     TOKEN_SUBJECT);
     KW("and",         TOKEN_AND);
     KW("or",          TOKEN_OR);
+    KW("action",      TOKEN_ACTION);
+    KW("succession",  TOKEN_SUCCESSION);
+    KW("first",       TOKEN_FIRST);
+    KW("then",        TOKEN_THEN);
+    KW("start",       TOKEN_START);
+    KW("done",        TOKEN_DONE);
+    KW("state",       TOKEN_STATE);
+    KW("exhibit",     TOKEN_EXHIBIT);
+    KW("transition",  TOKEN_TRANSITION);
+    KW("entry",       TOKEN_ENTRY);
+    KW("exit",        TOKEN_EXIT);
+    KW("do",          TOKEN_DO);
+    KW("accept",      TOKEN_ACCEPT);
+    KW("if",          TOKEN_IF);
+    KW("perform",     TOKEN_PERFORM);
+    KW("return",      TOKEN_RETURN);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -239,6 +256,30 @@ static Token string(void) {
     if (isAtEnd()) return errorToken("Unterminated string.");
     advance();                        /* closing quote */
     return makeToken(TOKEN_STRING);
+}
+
+/* SysML allows single-quoted lexical names that may contain hyphens,
+ * spaces, or digits (e.g. `'off-on'`, `'1'`).  These tokenize as
+ * regular identifiers from the parser's point of view; the lexeme
+ * we produce strips the surrounding quotes so the printer can echo
+ * either form back unambiguously.                                   */
+static Token quotedName(void) {
+    /* `scanner.start` is currently at the opening apostrophe.  Skip it
+     * for the lexeme so callers see only the interior text.            */
+    const char* interiorStart = scanner.current;
+    while (peek() != '\'' && !isAtEnd()) {
+        if (peek() == '\n') scanner.line++;
+        advance();
+    }
+    if (isAtEnd()) return errorToken("Unterminated quoted name.");
+    int len = (int)(scanner.current - interiorStart);
+    advance();                        /* closing apostrophe */
+    Token t;
+    t.type   = TOKEN_IDENTIFIER;
+    t.start  = interiorStart;
+    t.length = len;
+    t.line   = scanner.line;
+    return t;
 }
 
 /* ----------------------------------------------------------- doc bodies
@@ -332,7 +373,7 @@ Token scanToken(void) {
     case '.': return makeToken(match('.') ? TOKEN_DOT_DOT : TOKEN_DOT);
     case '+': return makeToken(TOKEN_PLUS);
     case '-': return makeToken(TOKEN_MINUS);
-    case '*': return makeToken(TOKEN_STAR);
+    case '*': return makeToken(match('*') ? TOKEN_STAR_STAR : TOKEN_STAR);
     case '/': return makeToken(TOKEN_SLASH);   /* comments handled above */
     case ':':
         if (match(':')) return makeToken(TOKEN_COLON_COLON);
@@ -344,9 +385,12 @@ Token scanToken(void) {
     case '=': return makeToken(match('=') ? TOKEN_EQUAL_EQUAL   : TOKEN_EQUAL);
     case '!': return makeToken(match('=') ? TOKEN_BANG_EQUAL    : TOKEN_BANG);
     case '~': return makeToken(TOKEN_TILDE);
+    case '@': return makeToken(TOKEN_AT);
+    case '#': return makeToken(TOKEN_HASH);
     case '<': return makeToken(match('=') ? TOKEN_LESS_EQUAL    : TOKEN_LESS);
     case '>': return makeToken(match('=') ? TOKEN_GREATER_EQUAL : TOKEN_GREATER);
     case '"': return string();
+    case '\'': return quotedName();
     }
 
     return errorToken("Unexpected character.");
@@ -369,9 +413,12 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_PLUS:           return "PLUS";
     case TOKEN_MINUS:          return "MINUS";
     case TOKEN_STAR:           return "STAR";
+    case TOKEN_STAR_STAR:      return "STAR_STAR";
     case TOKEN_SLASH:          return "SLASH";
     case TOKEN_BANG:           return "BANG";
     case TOKEN_TILDE:          return "TILDE";
+    case TOKEN_AT:             return "AT";
+    case TOKEN_HASH:            return "HASH";
     case TOKEN_COLON:          return "COLON";
     case TOKEN_COLON_COLON:    return "COLON_COLON";
     case TOKEN_COLON_GREATER:        return "COLON_GREATER";
@@ -403,6 +450,7 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_CONSTANT:       return "CONSTANT";
     case TOKEN_SPECIALIZES:    return "SPECIALIZES";
     case TOKEN_REDEFINES:      return "REDEFINES";
+    case TOKEN_SUBSETS:        return "SUBSETS";
     case TOKEN_PUBLIC:         return "PUBLIC";
     case TOKEN_PRIVATE:        return "PRIVATE";
     case TOKEN_PROTECTED:      return "PROTECTED";
@@ -430,6 +478,22 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_SUBJECT:        return "SUBJECT";
     case TOKEN_AND:            return "AND";
     case TOKEN_OR:             return "OR";
+    case TOKEN_ACTION:         return "ACTION";
+    case TOKEN_SUCCESSION:     return "SUCCESSION";
+    case TOKEN_FIRST:          return "FIRST";
+    case TOKEN_THEN:           return "THEN";
+    case TOKEN_START:          return "START";
+    case TOKEN_DONE:           return "DONE";
+    case TOKEN_STATE:          return "STATE";
+    case TOKEN_EXHIBIT:        return "EXHIBIT";
+    case TOKEN_TRANSITION:     return "TRANSITION";
+    case TOKEN_ENTRY:          return "ENTRY";
+    case TOKEN_EXIT:           return "EXIT";
+    case TOKEN_DO:             return "DO";
+    case TOKEN_ACCEPT:         return "ACCEPT";
+    case TOKEN_IF:             return "IF";
+    case TOKEN_PERFORM:        return "PERFORM";
+    case TOKEN_RETURN:         return "RETURN";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }

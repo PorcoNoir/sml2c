@@ -48,6 +48,7 @@ typedef enum {
     PREC_TERM,          /* + -                                           */
     PREC_FACTOR,        /* * /                                           */
     PREC_UNARY,         /* prefix - and !                                */
+    PREC_POWER,         /* ** (right-associative; SysML power operator)  */
     PREC_CALL,          /* . () [] (postfix; reserved)                   */
     PREC_PRIMARY
 } Precedence;
@@ -179,6 +180,7 @@ static const ParseRule rules[TOKEN_EOF + 1] = {
     [TOKEN_PLUS]            = { NULL,           binaryExpr,  PREC_TERM       },
     [TOKEN_MINUS]           = { unaryExpr,      binaryExpr,  PREC_TERM       },
     [TOKEN_STAR]            = { NULL,           binaryExpr,  PREC_FACTOR     },
+    [TOKEN_STAR_STAR]       = { NULL,           binaryExpr,  PREC_POWER      },
     [TOKEN_SLASH]           = { NULL,           binaryExpr,  PREC_FACTOR     },
     [TOKEN_BANG]            = { unaryExpr,      NULL,        PREC_NONE       },
     [TOKEN_BANG_EQUAL]      = { NULL,           binaryExpr,  PREC_EQUALITY   },
@@ -224,6 +226,20 @@ static Node* parsePrecedence(Precedence prec) {
         return dummy;
     }
     Node* left = prefix();
+
+    /* SysML measurement-units suffix:  `75[kg]`, `1.96[m/s**2]`, `(0,0,0)[spatialCF]`.
+     * For now we silently consume the bracket-balanced expression so the
+     * parser can advance.  Units carry no AST node yet — typechecker
+     * v0.6 will introduce dimensional analysis.                        */
+    while (check(TOKEN_LEFT_BRACKET)) {
+        advance();                          /* eat '[' */
+        int depth = 1;
+        while (depth > 0 && !check(TOKEN_EOF)) {
+            if      (match(TOKEN_LEFT_BRACKET))  depth++;
+            else if (match(TOKEN_RIGHT_BRACKET)) depth--;
+            else advance();
+        }
+    }
 
     while (prec <= getRule(parser.current.type)->precedence) {
         advance();

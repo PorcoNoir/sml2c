@@ -40,8 +40,44 @@ static void emitIndent(S* s) {
     for (int i = 0; i < s->depth; i++) fputs("    ", s->out);
 }
 
-static void emitToken(S* s, Token t) {
+/* Emit a token's lexeme verbatim — no quoting heuristic.  Used for
+ * doc bodies and other free-form text payloads.  Names should go
+ * through emitToken() which adds quotes when the lexeme isn't a
+ * bare identifier.                                                  */
+static void emitRawToken(S* s, Token t) {
     if (t.length > 0) fwrite(t.start, 1, (size_t)t.length, s->out);
+}
+
+/* Returns true if `t` is the (lexeme of a) plain identifier — i.e. a
+ * letter or underscore followed by alphanumerics or underscores.  Any
+ * other shape (hyphens, digits-only, embedded spaces) means the
+ * original source quoted it with apostrophes, and we must do the
+ * same on output to round-trip.                                       */
+static bool isBareIdentifier(Token t) {
+    if (t.length == 0) return false;
+    char c = t.start[0];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_')) {
+        return false;
+    }
+    for (int i = 1; i < t.length; i++) {
+        char d = t.start[i];
+        if (!((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z')
+              || (d >= '0' && d <= '9') || d == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void emitToken(S* s, Token t) {
+    if (t.length == 0) return;
+    if (isBareIdentifier(t)) {
+        fwrite(t.start, 1, (size_t)t.length, s->out);
+    } else {
+        fputc('\'', s->out);
+        fwrite(t.start, 1, (size_t)t.length, s->out);
+        fputc('\'', s->out);
+    }
 }
 
 /* Forward declarations for the mutual recursion. */
@@ -148,6 +184,7 @@ static const char* opSymbol(TokenType t) {
     case TOKEN_PLUS:           return "+";
     case TOKEN_MINUS:          return "-";
     case TOKEN_STAR:           return "*";
+    case TOKEN_STAR_STAR:      return "**";
     case TOKEN_SLASH:          return "/";
     case TOKEN_BANG:           return "!";
     case TOKEN_EQUAL_EQUAL:    return "==";
@@ -169,7 +206,7 @@ static void emitExpression(S* s, const Node* expr) {
     if (!expr) return;
     switch (expr->kind) {
     case NODE_LITERAL:
-        emitToken(s, expr->as.literal.token);
+        emitRawToken(s, expr->as.literal.token);
         break;
     case NODE_QUALIFIED_NAME:
         emitQualifiedName(s, expr);
@@ -210,6 +247,8 @@ static const char* defKeyword(DefKind k) {
     case DEF_CONSTRAINT: return "constraint";
     case DEF_REQUIREMENT:return "requirement";
     case DEF_SUBJECT:    return "subject";
+    case DEF_ACTION:     return "action";
+    case DEF_STATE:      return "state";
     }
     return "?";
 }
@@ -278,15 +317,28 @@ static void emitUsage(S* s, const Node* n) {
     emitVisibility(s, n->as.usage.visibility);
     emitAssertKind(s, n->as.usage.assertKind);
     emitDirection (s, n->as.usage.direction);
+    /* Emit `ref` only when the user wrote it explicitly.  The
+     * referentialchecker may set `isReference=true` on usages where
+     * SysML semantics force referentiality; that flag is for downstream
+     * passes, not for source emission.  Bare-ref usages (DEF_REFERENCE
+     * with isReferenceExplicit=true) print `ref name`; direction-only
+     * parameters (DEF_REFERENCE with isReferenceExplicit=false) print
+     * just `in name`.                                                  */
+    bool emitRef = n->as.usage.isReferenceExplicit;
     emitModifiers (s, n->as.usage.isDerived,
                        n->as.usage.isAbstract,
                        n->as.usage.isConstant,
-                       n->as.usage.isReference);
+                       emitRef);
 
     /* Bare-ref usages (DEF_REFERENCE) print as `ref name : T;` —
      * the `ref` keyword is already emitted by emitModifiers above
      * (isReference is always true for these).  Don't add an extra
-     * keyword.                                                     */
+     * keyword.  `perform` usages emit `perform action <name>` or
+     * `perform <name>` depending on whether they have a name; the
+     * round-trip stays a fixed point either way.                   */
+    if (n->as.usage.isPerform) {
+        fputs("perform ", s->out);
+    }
     if (n->as.usage.defKind != DEF_REFERENCE) {
         fputs(defKeyword(n->as.usage.defKind), s->out);
         if (n->as.usage.name.length > 0) fputc(' ', s->out);
@@ -332,12 +384,21 @@ static void emitUsage(S* s, const Node* n) {
 static void emitAttribute(S* s, const Node* n) {
     emitIndent(s);
     emitVisibility(s, n->as.attribute.visibility);
+    /* Same rule as emitUsage: emit `ref` only when source had it
+     * explicitly.  The referentialchecker forces isReference=true on
+     * every attribute usage (rule #2), but that's a downstream marker
+     * — the user didn't write `ref attribute` in source.              */
     emitModifiers (s, n->as.attribute.isDerived,
                        n->as.attribute.isAbstract,
                        n->as.attribute.isConstant,
-                       n->as.attribute.isReference);
+                       n->as.attribute.isReferenceExplicit);
     fputs("attribute ", s->out);
-    emitToken(s, n->as.attribute.name);
+    /* An attribute with no source-given name (`attribute redefines mass = 75 [kg];`,
+     * `attribute :>> fuelMass;`) emits the keyword alone with no
+     * trailing identifier.                                            */
+    if (n->as.attribute.name.length > 0) {
+        emitToken(s, n->as.attribute.name);
+    }
 
     emitNameList   (s, " : ",   &n->as.attribute.types);
     emitNameList   (s, " :> ",  &n->as.attribute.specializes);
@@ -363,7 +424,7 @@ static void emitImport(S* s, const Node* n) {
 static void emitDoc(S* s, const Node* n) {
     emitIndent(s);
     fputs("/**", s->out);
-    emitToken(s, n->as.doc.body);
+    emitRawToken(s, n->as.doc.body);
     fputs("*/\n", s->out);
 }
 
@@ -395,7 +456,7 @@ static void emitComment(S* s, const Node* n) {
      * Emit verbatim so round-trip is fixed-point — the body's
      * own leading/trailing whitespace is part of the AST. */
     fputs(" /*", s->out);
-    emitToken(s, n->as.comment.body);
+    emitRawToken(s, n->as.comment.body);
     fputs("*/\n", s->out);
 }
 
@@ -416,6 +477,127 @@ static void emitDependency(S* s, const Node* n) {
     for (int i = 0; i < n->as.dependency.targets.count; i++) {
         if (i > 0) fputs(", ", s->out);
         emitQualifiedName(s, n->as.dependency.targets.items[i]);
+    }
+    fputs(";\n", s->out);
+}
+
+/* Print one succession target — either a qname reference or an
+ * inline action declaration `action [name] [: T] [{ ... }]`.        */
+static void emitSuccessionTarget(S* s, const Node* t) {
+    if (!t) return;
+    if (t->kind == NODE_QUALIFIED_NAME) {
+        emitQualifiedName(s, t);
+        return;
+    }
+    /* Inline action declaration. */
+    fputs("action", s->out);
+    if (t->as.usage.name.length > 0) {
+        fputc(' ', s->out);
+        emitToken(s, t->as.usage.name);
+    }
+    if (t->as.usage.types.count > 0) {
+        fputs(" : ", s->out);
+        for (int i = 0; i < t->as.usage.types.count; i++) {
+            if (i > 0) fputs(", ", s->out);
+            emitQualifiedName(s, t->as.usage.types.items[i]);
+        }
+    }
+    if (t->as.usage.memberCount > 0) {
+        fputs(" {\n", s->out);
+        s->depth++;
+        for (int i = 0; i < t->as.usage.memberCount; i++) {
+            emitNode(s, t->as.usage.members[i], false);
+        }
+        s->depth--;
+        emitIndent(s);
+        fputs("}", s->out);
+    }
+}
+
+static void emitSuccession(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.succession.visibility);
+    /* Three surface forms:
+     *   `first F;`                    — first=F, targets=[]
+     *   `then T (then T)*;`           — first=NULL, targets=[T,…], no name
+     *   `succession [name] [first F] then T (then T)*;` — everything else
+     */
+    bool hasName    = (n->as.succession.name.length > 0);
+    bool hasFirst   = (n->as.succession.first != NULL);
+    bool hasTargets = (n->as.succession.targets.count > 0);
+
+    if (hasFirst && !hasTargets && !hasName) {
+        fputs("first ", s->out);
+        emitQualifiedName(s, n->as.succession.first);
+        fputs(";\n", s->out);
+        return;
+    }
+    if (!hasFirst && hasTargets && !hasName) {
+        for (int i = 0; i < n->as.succession.targets.count; i++) {
+            if (i > 0) fputc(' ', s->out);
+            fputs("then ", s->out);
+            emitSuccessionTarget(s, n->as.succession.targets.items[i]);
+        }
+        fputs(";\n", s->out);
+        return;
+    }
+    /* Full form. */
+    fputs("succession", s->out);
+    if (hasName) {
+        fputc(' ', s->out);
+        emitToken(s, n->as.succession.name);
+    }
+    if (hasFirst) {
+        fputs(" first ", s->out);
+        emitQualifiedName(s, n->as.succession.first);
+    }
+    for (int i = 0; i < n->as.succession.targets.count; i++) {
+        fputs(" then ", s->out);
+        emitSuccessionTarget(s, n->as.succession.targets.items[i]);
+    }
+    fputs(";\n", s->out);
+}
+
+static void emitTransition(S* s, const Node* n) {
+    emitIndent(s);
+    emitVisibility(s, n->as.transition.visibility);
+    fputs("transition", s->out);
+    if (n->as.transition.name.length > 0) {
+        fputc(' ', s->out);
+        emitToken(s, n->as.transition.name);
+    }
+    if (n->as.transition.first) {
+        fputs(" first ", s->out);
+        emitQualifiedName(s, n->as.transition.first);
+    }
+    if (n->as.transition.accept) {
+        fputs(" accept ", s->out);
+        emitQualifiedName(s, n->as.transition.accept);
+    }
+    if (n->as.transition.guard) {
+        fputs(" if ", s->out);
+        emitExpression(s, n->as.transition.guard);
+    }
+    if (n->as.transition.effect) {
+        fputs(" do ", s->out);
+        emitQualifiedName(s, n->as.transition.effect);
+    }
+    if (n->as.transition.target) {
+        fputs(" then ", s->out);
+        emitQualifiedName(s, n->as.transition.target);
+    }
+    fputs(";\n", s->out);
+}
+
+static void emitLifecycleAction(S* s, const Node* n) {
+    emitIndent(s);
+    switch (n->as.lifecycleAction.kind) {
+    case LIFECYCLE_ENTRY: fputs("entry ", s->out); break;
+    case LIFECYCLE_DO:    fputs("do ",    s->out); break;
+    case LIFECYCLE_EXIT:  fputs("exit ",  s->out); break;
+    }
+    if (n->as.lifecycleAction.action) {
+        emitQualifiedName(s, n->as.lifecycleAction.action);
     }
     fputs(";\n", s->out);
 }
@@ -471,6 +653,9 @@ static void emitNode(S* s, const Node* n, bool insideEnumDef) {
     case NODE_ALIAS:          emitAlias     (s, n); break;
     case NODE_COMMENT:        emitComment   (s, n); break;
     case NODE_DEPENDENCY:     emitDependency(s, n); break;
+    case NODE_SUCCESSION:     emitSuccession(s, n); break;
+    case NODE_TRANSITION:     emitTransition(s, n); break;
+    case NODE_LIFECYCLE_ACTION: emitLifecycleAction(s, n); break;
 
     /* These shouldn't appear at statement positions; they are
      * embedded inside other emitters via emitExpression /

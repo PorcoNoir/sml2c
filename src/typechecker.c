@@ -387,6 +387,29 @@ static void checkAttribute(const Node* attr, bool insideEnumDef) {
     }
 }
 
+/* Validate that a succession reference points at an action usage.
+ * Builtin start/done arrive pre-resolved (they're DEF_ACTION usages
+ * themselves) so they pass the same check.  NULL refs are silently
+ * accepted — that's the `then x;` continuation form.                 */
+static void checkSuccessionRef(const Node* qname, int line) {
+    if (!qname) return;
+    if (qname->kind != NODE_QUALIFIED_NAME) return;
+    const Node* target = qname->as.qualifiedName.resolved;
+    if (!target) return;          /* tentative — let resolver speak  */
+    bool isAction = false;
+    if (target->kind == NODE_USAGE && target->as.usage.defKind == DEF_ACTION) {
+        isAction = true;
+    } else if (target->kind == NODE_DEFINITION
+            && target->as.scope.defKind == DEF_ACTION) {
+        isAction = true;
+    }
+    if (!isAction) {
+        typeError(line,
+                  "Succession reference must point at an action usage; "
+                  "got '%s'.", typeName(target));
+    }
+}
+
 /* ---- whole-program walker -------------------------------------- */
 
 static void walk(const Node* n, bool insideEnumDef) {
@@ -424,6 +447,20 @@ static void walk(const Node* n, bool insideEnumDef) {
         break;
     case NODE_ATTRIBUTE:
         checkAttribute(n, insideEnumDef);
+        break;
+    case NODE_SUCCESSION:
+        checkSuccessionRef(n->as.succession.first, n->line);
+        for (int i = 0; i < n->as.succession.targets.count; i++) {
+            const Node* t = n->as.succession.targets.items[i];
+            if (!t) continue;
+            if (t->kind == NODE_QUALIFIED_NAME) {
+                checkSuccessionRef(t, n->line);
+            } else {
+                /* Inline action declaration — recurse so its own
+                 * members get checked too.                            */
+                walk(t, false);
+            }
+        }
         break;
     default:
         break;
