@@ -19,6 +19,11 @@
 #include "parser_internal.h"
 #include "builtin.h"           /* builtinStart() / builtinDone() pseudo-actions */
 
+/* Forward declarations needed by attributeDecl() and other early
+ * functions that call helpers defined later in the file.            */
+static void skipBracedBlock(void);
+static void skipMetadataPrefix(void);
+
 /*  parseFeatureRelationships — the optional `: T :> S :>> R [m]` tail
  *  shared by attributes and usages.  Each clause appears at most once;
  *  duplicates report errors but the parser continues.                 */
@@ -124,7 +129,18 @@ static Node* attributeDecl(void) {
         defaultValue = expression();
     }
 
-    consume(TOKEN_SEMICOLON, "Expected ';' after attribute.");
+    /* Attributes may carry an inline body to declare overrides for
+     * inherited features:
+     *     attribute spatialCF: CartesianSpatial3dCoordinateFrame[1]
+     *         { :>> mRefs = (m, m, m); }
+     * We parse-and-skip the body for now (the AST has no slot for
+     * attribute-internal members); just consume tokens to a balanced
+     * `}` so the rest of the enclosing scope still parses.            */
+    if (match(TOKEN_LEFT_BRACE)) {
+        skipBracedBlock();
+    } else {
+        consume(TOKEN_SEMICOLON, "Expected ';' after attribute.");
+    }
 
     Node* a = astMakeNode(NODE_ATTRIBUTE, line);
     a->as.attribute.name         = name;
@@ -193,11 +209,6 @@ static const KindInfo kAnalysis   = { DEF_ANALYSIS,   false, true,  false, "anal
  * only.  No keyword to consume — caller invokes usage() directly,
  * not definitionOrUsage().                                          */
 static const KindInfo kReference  = { DEF_REFERENCE,  false, false, false, "reference"  };
-
-/* Forward declarations needed before allocateStatement / metadata
- * helpers that reference them.                                      */
-static void skipBracedBlock(void);
-static void skipMetadataPrefix(void);
 
 /* Parse a feature-reference path used as a connect/flow endpoint:
  *
@@ -434,6 +445,9 @@ static Node* usage(const KindInfo* k, Direction dir) {
                       || check(TOKEN_REDEFINES) || check(TOKEN_SPECIALIZES)
                       || check(TOKEN_SUBSETS)
                       || check(TOKEN_LEFT_BRACKET)
+                      /* `attribute = expr;` — anonymous initializer.       */
+                      || check(TOKEN_EQUAL)
+                      || check(TOKEN_DEFAULT)
                       /* `constraint { expr }` — anonymous inline constraint. */
                       || (k->kind == DEF_CONSTRAINT && check(TOKEN_LEFT_BRACE));
         if (!anonRelOk
@@ -451,13 +465,36 @@ static Node* usage(const KindInfo* k, Direction dir) {
 
     FeatureRels rels = parseFeatureRelationships();
 
-    /* `flow of T from X to Y;` and `message of T from X to Y;` —
-     * `of` is an alternate type-clause keyword used in flow- and
-     * message-usage positions.  Splice the type into rels.types so
-     * downstream code treats it identically to a `: T` clause.       */
+    /* `flow of T from X to Y;` and `message of <name>[:T] from X to Y;`
+     * — `of` introduces an item parameter on the flow/message.  In
+     * the simplest form `of T` is just a type qname; for messages it
+     * frequently carries a name as well: `message of c:IgnitionCmd
+     * from a to b;`.  We splice the type into rels.types so downstream
+     * code treats it identically to a `: T` clause; the optional name
+     * is currently dropped (no AST slot for message item params).    */
     if ((k->kind == DEF_FLOW || k->kind == DEF_MESSAGE)
         && match(TOKEN_OF)) {
-        appendQualifiedNameList(&rels.types);
+        if (k->kind == DEF_MESSAGE && check(TOKEN_IDENTIFIER)) {
+            /* Peek for `name : Type`.  Eat the name; if `:` follows,
+             * the type is the next qname list, otherwise the name we
+             * just ate IS the type qname.                            */
+            advance();          /* eat first identifier */
+            Token nameOrType = parser.previous;
+            if (match(TOKEN_COLON)) {
+                appendQualifiedNameList(&rels.types);
+            } else {
+                /* It was the type, not a name.  Build a one-segment qname.  */
+                Node* q = astMakeNode(NODE_QUALIFIED_NAME, nameOrType.line);
+                astAppendQualifiedPart(q, nameOrType);
+                while (match(TOKEN_COLON_COLON)) {
+                    consume(TOKEN_IDENTIFIER, "Expected name after '::'.");
+                    astAppendQualifiedPart(q, parser.previous);
+                }
+                astListAppend(&rels.types, q);
+            }
+        } else {
+            appendQualifiedNameList(&rels.types);
+        }
     }
 
     /* ---- optional endpoint clause ----------------------------------- */
@@ -474,6 +511,10 @@ static Node* usage(const KindInfo* k, Direction dir) {
     } else if ((k->kind == DEF_FLOW || k->kind == DEF_MESSAGE)
                && match(TOKEN_FROM)) {
         parseEndsClause(&ends, "flow");
+    } else if (k->kind == DEF_ALLOCATION && match(TOKEN_ALLOCATE)) {
+        /* `allocation <name> : T allocate <src> to <tgt> { ... }`
+         * — an allocation usage carrying its own allocate clause.    */
+        parseEndsClause(&ends, "allocation");
     } else if (k->kind == DEF_FLOW
                && (check(TOKEN_IDENTIFIER) || check(TOKEN_LEFT_BRACKET))
                && name.length == 0
@@ -502,10 +543,11 @@ static Node* usage(const KindInfo* k, Direction dir) {
      *   action trigger1 accept ignitionCmd:T via portRef;
      *   action sendStatus send es via portRef { ... }
      *   action a parallel { ... }
+     *   exhibit state s parallel { ... }
      *
      * Parse-and-skip everything after the keyword until the next `;`
      * or `{` so the rest of the body stays parseable.                 */
-    if (k->kind == DEF_ACTION
+    if ((k->kind == DEF_ACTION || k->kind == DEF_STATE)
         && (check(TOKEN_ACCEPT) || check(TOKEN_IDENTIFIER))) {
         bool isSend = check(TOKEN_IDENTIFIER) && parser.current.length == 4
                    && memcmp(parser.current.start, "send", 4) == 0;
@@ -912,11 +954,15 @@ static Node* parseLifecycleAction(LifecycleKind kind) {
     (void)match(TOKEN_ACTION);
     /* Accept dotted paths too: `entry vehicle.driveAction;`.         */
     la->as.lifecycleAction.action = dottedReference();
-    /* Optional inline body — `entry action a { ... };` — parse-and-skip. */
+    /* Optional inline body — `do senseTemperature { ... }`.  When a
+     * body is present, the `}` terminates the lifecycle statement and
+     * no trailing `;` is required.  Without a body, `;` is required.   */
     if (match(TOKEN_LEFT_BRACE)) {
         skipBracedBlock();
+        (void)match(TOKEN_SEMICOLON);   /* tolerate `};` if author wrote one */
+    } else {
+        consume(TOKEN_SEMICOLON, "Expected ';' after lifecycle action.");
     }
-    consume(TOKEN_SEMICOLON, "Expected ';' after lifecycle action.");
     return la;
 }
 
@@ -1203,12 +1249,16 @@ static void skipBracedBlock(void) {
  * or `#logical part vehicleLogical : Vehicle { … }`.  We don't yet
  * model metadata in the AST; for the parser to advance, we just consume
  * the syntax.  Multiple metadata applications can chain, so we loop.   */
-static void skipMetadataPrefix(void) {
+/* Return true if the metadata block we just ate was a complete
+ * statement (`@X { … };` or `@X about Y;` or just `@X;`).  In that
+ * case the caller should treat the metadata as a standalone item
+ * and not look for a follow-on declaration — common form is
+ *     part bumper { @Safety { isMandatory = true; } }
+ * where `@Safety { … }` is the only member of the body.            */
+static bool skipMetadataPrefixIsStatement(void) {
+    bool wasStatement = false;
     for (;;) {
         if (match(TOKEN_HASH)) {
-            /* Eat the metadata reference name.  May be a qualified
-             * name (`#some::ns::Foo`); consume identifiers while we
-             * see `::`.                                              */
             if (check(TOKEN_IDENTIFIER)) advance();
             while (match(TOKEN_COLON_COLON)) {
                 if (check(TOKEN_IDENTIFIER)) advance();
@@ -1216,37 +1266,44 @@ static void skipMetadataPrefix(void) {
             continue;
         }
         if (match(TOKEN_AT)) {
-            /* `@Name [{ … }]` or `@Name about <qnames>;`.  Eat the
-             * name (possibly qualified), then optionally a block.    */
             if (check(TOKEN_IDENTIFIER)) advance();
             while (match(TOKEN_COLON_COLON)) {
                 if (check(TOKEN_IDENTIFIER)) advance();
             }
-            /* Tolerate `about <qnames>` in a metadata-application context.
-             * We're only used as a prefix; the more complete `@X about Y;`
-             * form ends at the next `;`.                              */
             if (match(TOKEN_ABOUT)) {
-                /* Eat qnames separated by commas until '{' or ';'.  */
                 while (!check(TOKEN_LEFT_BRACE) && !check(TOKEN_SEMICOLON)
                        && !check(TOKEN_EOF)) {
                     advance();
                 }
+                wasStatement = true;
             }
             if (match(TOKEN_LEFT_BRACE)) {
                 skipBracedBlock();
+                wasStatement = true;     /* `@X { … }` is a complete stmt */
             }
-            /* If `@…;` was a standalone statement, eat its trailing ';'. */
-            (void)match(TOKEN_SEMICOLON);
+            if (match(TOKEN_SEMICOLON)) wasStatement = true;
             continue;
         }
         break;
     }
+    return wasStatement;
+}
+
+static void skipMetadataPrefix(void) {
+    (void)skipMetadataPrefixIsStatement();
 }
 
 
 Node* declaration(void) {
-    /* Metadata annotations may precede any declaration; consume them. */
-    skipMetadataPrefix();
+    /* Metadata annotations may precede any declaration; if they form
+     * a complete statement on their own (e.g. `@Safety { … }`), we
+     * return immediately so callers don't keep looking for a kind
+     * keyword.                                                       */
+    bool metaWasStatement = skipMetadataPrefixIsStatement();
+    if (metaWasStatement
+        && (check(TOKEN_RIGHT_BRACE) || check(TOKEN_EOF))) {
+        return NULL;
+    }
 
     /* Doc forms come first — they don't take any prefix. */
     if (check(TOKEN_DOC) || check(TOKEN_DOC_BODY)) return docDecl();
@@ -1562,7 +1619,19 @@ Node* declaration(void) {
             astListAppend(&u->as.usage.redefines, rels.redefines.items[i]);
         }
         if (rels.multiplicity) u->as.usage.multiplicity = rels.multiplicity;
-        consume(TOKEN_SEMICOLON, "Expected ';' after perform statement.");
+        /* Optional inline body — `perform action a { ... }`.  We
+         * parse it as a normal usage body so nested actions inside
+         * the perform are members of the resulting action usage.    */
+        if (match(TOKEN_LEFT_BRACE)) {
+            while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+                Node* m = declaration();
+                if (m) astAppendUsageMember(u, m);
+                if (parser.panicMode) synchronize();
+            }
+            consume(TOKEN_RIGHT_BRACE, "Expected '}' to close perform body.");
+        } else {
+            consume(TOKEN_SEMICOLON, "Expected ';' after perform statement.");
+        }
         result = u;
     }
     else if (match(TOKEN_RETURN)) {
@@ -1690,16 +1759,28 @@ Node* declaration(void) {
         /* Bare-form usage (§8.3.6.3 ReferenceUsage): no kind keyword,
          * just an optional ref/direction prefix and a name.
          *
-         * Two flavours both reach here:
-         *   - `ref name : T = expr;`         — explicit ReferenceUsage
-         *   - `in name : T;` / `out name : T;` — directional parameter
+         * Three flavours reach here:
+         *   - `ref name : T = expr;`        — explicit ReferenceUsage
+         *   - `in name : T;` / `out …;`     — directional parameter
          *     used in constraint, calc, action def bodies
+         *   - `name :> X = expr;`           — anonymous feature with no
+         *     kind keyword at all (rare; appears in derived-quantity
+         *     packages like `distancePerVolume :> scalarQuantities = …;`)
          *
-         * We accept both as ReferenceUsage and let the modifiers stamp
-         * onto the resulting node.                                    */
-        bool bareForm = check(TOKEN_IDENTIFIER)
-                     && (mods.isReference || dir != DIR_NONE);
-        if (bareForm) {
+         * For (1) and (2) the modifier or direction makes the intent
+         * unambiguous — anything starting with `ref name` or `in name`
+         * is a bare ref/parameter usage.
+         *
+         * For (3) we have to commit to the IDENTIFIER and check the
+         * next token; if it's a feature-relationship token, we're
+         * good — usage() will then re-lex from `previous` (which is
+         * the identifier we just consumed).  Since usage() expects
+         * the kind keyword as `previous`, we synthesize the bare
+         * form by NOT consuming the identifier here and letting
+         * usage() do it.                                              */
+        bool bareFormByModifier = check(TOKEN_IDENTIFIER)
+                              && (mods.isReference || dir != DIR_NONE);
+        if (bareFormByModifier) {
             Node* u = usage(&kReference, dir);
             if (u && u->kind == NODE_USAGE) {
                 u->as.usage.isDerived           = mods.isDerived;
@@ -1710,6 +1791,55 @@ Node* declaration(void) {
             }
             astSetVisibility(u, vis);
             return u;
+        }
+
+        /* Bare-form (3): `name :> X = expr;` with no kind keyword and
+         * no modifier/direction.  Commit to the IDENTIFIER and check
+         * what follows; if it's a feature-relationship token, build
+         * the usage manually.  Otherwise it's a real error.           */
+        if (check(TOKEN_IDENTIFIER)) {
+            Token saveCurrent = parser.current;
+            advance();                  /* commit: eat the identifier */
+            bool looksFeature =
+                   check(TOKEN_COLON)
+                || check(TOKEN_COLON_GREATER)
+                || check(TOKEN_COLON_GREATER_GREATER)
+                || check(TOKEN_REDEFINES) || check(TOKEN_SPECIALIZES)
+                || check(TOKEN_SUBSETS)
+                || check(TOKEN_LEFT_BRACKET)
+                || check(TOKEN_EQUAL)
+                || check(TOKEN_DEFAULT);
+            if (looksFeature) {
+                int line = saveCurrent.line;
+                Node* u = astMakeNode(NODE_USAGE, line);
+                u->as.usage.defKind = DEF_REFERENCE;
+                u->as.usage.name    = saveCurrent;
+                FeatureRels rels = parseFeatureRelationships();
+                u->as.usage.types        = rels.types;
+                u->as.usage.specializes  = rels.specializes;
+                u->as.usage.redefines    = rels.redefines;
+                u->as.usage.multiplicity = rels.multiplicity;
+                if (match(TOKEN_EQUAL) || match(TOKEN_DEFAULT)) {
+                    u->as.usage.defaultValue = expression();
+                }
+                if (match(TOKEN_LEFT_BRACE)) {
+                    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+                        Node* m = declaration();
+                        if (m) astAppendUsageMember(u, m);
+                        if (parser.panicMode) synchronize();
+                    }
+                    consume(TOKEN_RIGHT_BRACE, "Expected '}' to close usage body.");
+                } else {
+                    consume(TOKEN_SEMICOLON, "Expected ';' after bare feature.");
+                }
+                astSetVisibility(u, vis);
+                return u;
+            }
+            /* Not a feature — error reporting needs to point at the
+             * still-unconsumed current token, but we already moved
+             * past the identifier.  Just emit the generic message.   */
+            errorAtCurrent("Expected declaration.");
+            return NULL;
         }
 
         if (vis != VIS_DEFAULT) {

@@ -251,44 +251,60 @@ sml2c --emit-json file.sysml | python tools/render_drawio.py - out.drawio
 
 ## Status
 
-v0.9.  Long-tail cleanup: lots of small parser features that closed
-the gap on the PTC reference file from 87 errors to 49 (and 564 → 49
-cumulative since v0.2 — **a 91% reduction**).  Adds:
+v0.10.  A second long-tail pass against the PTC reference file using
+the **default** invocation (full pipeline: parse + resolve +
+typecheck + redefcheck + connectcheck + refcheck).  The 49-error
+count from v0.9 was measured under `--no-resolve --no-typecheck
+--no-redefcheck --no-connectcheck --no-refcheck`, which silenced
+resolution-level errors that surface earlier.  v0.10 fixes the
+default-pipeline view: **46 → 19 errors** on the reference file.
 
-**Operators and forms:**
-- `meta` infix operator (`<feature> meta <type>`)
-- `default <expr>` keyword form of `=` initializer
-- `xor` boolean operator (was v0.8 but also in this layer)
-- Tuple expressions `(a, b, c)` — modeled as NODE_CALL with no callee
-- Anonymous flow with implicit `from`: `flow a.b to c.d;` and `flow a to b;`
-  — the parser reinterprets the first identifier as a source ref when
-  followed by `.` or `to`
+Adds:
 
-**Body/statement forms:**
-- Bare `constraint { expr };` without assertion prefix — dropped the
-  v0.2 strict rule; usage parser handles inline expression body for
-  DEF_CONSTRAINT (terminated by `}`, no `;` needed)
-- Anonymous enum values: `enum = 60;`, `enum = 80;` inside enum
-  bodies; emitter renders the keyword for unnamed values
-- `entry/do/exit action <name> [{body}];` — silently consume optional
-  `action` keyword and inline body in lifecycle actions
-- `accept`/`send`/`parallel` tail clauses on action usages —
-  parse-and-skip until `;` or `{`
-- `event <ref>;` short-form event-reference statement (no `occurrence`)
-- `#metadata` annotations also work at the start of a usage (not just
-  declaration) — `end #logical logicalEnd;`
-- `include use case <name>;` — multi-token form recognized
-
-**New DefKind:**
-- `DEF_ANALYSIS` for `analysis name { ... }` blocks
+**Parser holes filled:**
+- Bare-form features `name :> X = expr;` with no kind keyword and no
+  modifier (`distancePerVolume :> scalarQuantities = ...;`,
+  `kpl : DerivedUnit = km / L;`).  Common in derived-quantity
+  packages.
+- `parallel` on state usages (was action-only) — silently consumed.
+- Lifecycle actions with bodies no longer require trailing `;`:
+  `do senseTemperature { out temp; }` ends at the `}`.
+- Attributes can carry inline bodies for inherited-feature overrides:
+  `attribute spatialCF : Box[1] { :>> mRefs = (m, m, m); }`.
+- Standalone metadata blocks as the only member of a usage body:
+  `part bumper { @Safety { isMandatory = true; } }`.
+- Anonymous-by-`=` usages (`in item = expr;`) and anonymous-by-
+  `default` (`attribute = default expr;`).
+- `perform action X { ... }` accepts inline bodies with member
+  declarations.
+- Allocation usages with `allocate` clauses:
+  `allocation X : T allocate Y to Z { ... }`.
+- `message of <name> : <Type> from a to b;` parses the optional name
+  separately from the type.
 
 **Test bookkeeping:**
-- `test/bad/BadAssertion.sysml` → `test/Assertion.sysml` (the strict
-  prefix rule it tested is gone)
-- New `test/LongTail.sysml` exercises most of the above
+- `test/bad/BadParallelState.sysml` → `test/ParallelState.sysml`
+  (the rule it tested is invalidated by v0.10's `parallel` acceptance).
+- New `test/LongTail2.sysml` exercising the above.
 
-The cross-cutting tax this turn: 9 files touched.  Roughly flat per-turn
-even as the parser keeps growing.
+**Engineering:**
+- Forward declarations for `skipBracedBlock` and
+  `skipMetadataPrefix` moved to the top of `parser_decl.c` so early
+  helpers can call them without implicit-decl warnings.
+
+**Cumulative reduction since v0.2: 564 → 19 (97%) on the default
+pipeline.**  The remaining ~19 errors are concentrated in `subject`-
+statement variants (`subject = X`, `subject {body}`, `subject X[n]`),
+the `assert <ref>;` form without explicit `constraint`/`requirement`
+keyword, the succession `... flow ...` and `... accept ...`
+continuations, and a batch of viewpoint keywords (`verify`, `frame`,
+`stakeholder`, `render`, `expose`).
+
+The cross-cutting tax this turn: **1 file** (just `parser_decl.c`).
+The fixes were all parser-only — no new tokens, no new DefKinds, no
+new AST shapes.  This is the leanest turn so far on per-feature edit
+count, which validates the hypothesis that we're past the structural-
+extension phase and into pure parser-coverage tightening.
 
 ## License & origin
 
