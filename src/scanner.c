@@ -232,6 +232,14 @@ static TokenType identifierType(void) {
     KW("include",     TOKEN_INCLUDE);
     KW("message",     TOKEN_MESSAGE);
     KW("use",         TOKEN_USE);
+    KW("metadata",    TOKEN_METADATA);
+    KW("verification",TOKEN_VERIFICATION);
+    KW("objective",   TOKEN_OBJECTIVE);
+    KW("satisfy",     TOKEN_SATISFY);
+    KW("filter",      TOKEN_FILTER);
+    KW("xor",         TOKEN_XOR);
+    KW("nonunique",   TOKEN_NONUNIQUE);
+    KW("ordered",     TOKEN_ORDERED);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -390,13 +398,26 @@ Token scanToken(void) {
     case ']': return makeToken(TOKEN_RIGHT_BRACKET);
     case ';': return makeToken(TOKEN_SEMICOLON);
     case ',': return makeToken(TOKEN_COMMA);
-    case '.': return makeToken(match('.') ? TOKEN_DOT_DOT : TOKEN_DOT);
+    case '.':
+        /* `.6` is a real literal — but only when a digit follows.
+         * Otherwise it's the dot-access / dot-dot operator.            */
+        if (isDigit(peek())) {
+            while (isDigit(peek())) advance();
+            return makeToken(TOKEN_NUMBER);
+        }
+        return makeToken(match('.') ? TOKEN_DOT_DOT : TOKEN_DOT);
     case '+': return makeToken(TOKEN_PLUS);
     case '-': return makeToken(TOKEN_MINUS);
     case '*': return makeToken(match('*') ? TOKEN_STAR_STAR : TOKEN_STAR);
     case '/': return makeToken(TOKEN_SLASH);   /* comments handled above */
     case ':':
-        if (match(':')) return makeToken(TOKEN_COLON_COLON);
+        if (match(':')) {
+            /* `::>` is sometimes used as an alternate spelling of `:>`
+             * in connect-end refinement positions.  Map it to the
+             * same token.                                             */
+            if (match('>')) return makeToken(TOKEN_COLON_GREATER);
+            return makeToken(TOKEN_COLON_COLON);
+        }
         if (match('>')) {
             if (match('>')) return makeToken(TOKEN_COLON_GREATER_GREATER);
             return makeToken(TOKEN_COLON_GREATER);
@@ -534,6 +555,14 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_INCLUDE:        return "INCLUDE";
     case TOKEN_MESSAGE:        return "MESSAGE";
     case TOKEN_USE:            return "USE";
+    case TOKEN_METADATA:       return "METADATA";
+    case TOKEN_VERIFICATION:   return "VERIFICATION";
+    case TOKEN_OBJECTIVE:      return "OBJECTIVE";
+    case TOKEN_SATISFY:        return "SATISFY";
+    case TOKEN_FILTER:         return "FILTER";
+    case TOKEN_XOR:            return "XOR";
+    case TOKEN_NONUNIQUE:      return "NONUNIQUE";
+    case TOKEN_ORDERED:        return "ORDERED";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }

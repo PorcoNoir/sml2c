@@ -93,7 +93,11 @@ typedef enum {
     DEF_ACTOR,              /* `actor def A { … }` / `actor a : A` */
     DEF_USE_CASE,           /* `use case def U { … }` / `use case u : U` */
     DEF_INCLUDE,            /* `include u : U` — include use-case usage */
-    DEF_MESSAGE             /* `message m of T from a to b;` */
+    DEF_MESSAGE,            /* `message m of T from a to b;` */
+    DEF_METADATA,           /* `metadata def Safety { ... }` */
+    DEF_VERIFICATION,       /* `verification def MassTest;` */
+    DEF_OBJECTIVE,          /* `objective :MaximizeObjective;` */
+    DEF_SATISFY             /* `satisfy X by Y { ... }` — assertion */
 } DefKind;
 
 /* The `assert` / `assume` / `require` modifier on a constraint or

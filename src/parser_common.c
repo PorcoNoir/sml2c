@@ -140,6 +140,11 @@ void synchronize(void) {
         case TOKEN_INCLUDE:
         case TOKEN_MESSAGE:
         case TOKEN_USE:
+        case TOKEN_METADATA:
+        case TOKEN_VERIFICATION:
+        case TOKEN_OBJECTIVE:
+        case TOKEN_SATISFY:
+        case TOKEN_FILTER:
         case TOKEN_ABSTRACT:    /* feature modifiers can begin a decl */
         case TOKEN_DERIVED:
         case TOKEN_CONSTANT:

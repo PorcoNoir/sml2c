@@ -177,7 +177,11 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "ActorDef",
         "UseCaseDef",
         "IncludeDef",
-        "MessageDef"
+        "MessageDef",
+        "MetadataDef",
+        "VerificationDef",
+        "ObjectiveDef",
+        "SatisfyDef"
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
@@ -207,7 +211,11 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "Actor",
         "UseCase",
         "Include",
-        "Message"
+        "Message",
+        "Metadata",
+        "Verification",
+        "Objective",
+        "Satisfy"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -258,6 +266,7 @@ static const char* operatorSymbol(TokenType t) {
     case TOKEN_GREATER_EQUAL:  return ">=";
     case TOKEN_AND:            return "and";
     case TOKEN_OR:             return "or";
+    case TOKEN_XOR:            return "xor";
     default:                   return "?";
     }
 }

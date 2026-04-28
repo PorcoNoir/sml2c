@@ -28,15 +28,18 @@ FeatureRels parseFeatureRelationships(void) {
         if (match(TOKEN_LEFT_BRACKET)) {
             if (r.multiplicity) error("Duplicate multiplicity.");
             r.multiplicity = parseMultiplicity();
+            /* Trailing multiplicity modifiers `nonunique` / `ordered`
+             * may appear in either order, possibly both:
+             *     attribute partMasses [*] nonunique :> ISQ::mass;
+             *     state failureModes [*] nonunique;
+             *     part wheels [4] ordered nonunique;
+             * We parse-and-skip them; they don't have AST slots yet.   */
+            while (match(TOKEN_NONUNIQUE) || match(TOKEN_ORDERED)) { /* eat */ }
         } else if (match(TOKEN_COLON)) {
             if (r.types.count > 0) error("Duplicate type clause.");
             appendQualifiedNameList(&r.types);
         } else if (match(TOKEN_COLON_GREATER) || match(TOKEN_SPECIALIZES)
                 || match(TOKEN_SUBSETS)) {
-            /* `subsets X` is the usage-side analogue of `:> X` (specializes
-             * for definitions).  At the AST level we treat both uniformly
-             * — the resolver/typechecker walk supertype chains the same
-             * way regardless of which keyword introduced the link.       */
             if (r.specializes.count > 0) error("Duplicate 'specializes/subsets' clause.");
             appendQualifiedNameList(&r.specializes);
         } else if (match(TOKEN_COLON_GREATER_GREATER) || match(TOKEN_REDEFINES)) {
@@ -147,7 +150,7 @@ typedef struct {
     const char* humanName;        /* "part", "port", … for messages    */
 } KindInfo;
 
-static const KindInfo kPart       = { DEF_PART,       false, true,  false, "part"       };
+static const KindInfo kPart       = { DEF_PART,       true,  true,  false, "part"       };
 static const KindInfo kPort       = { DEF_PORT,       true,  true,  false, "port"       };
 static const KindInfo kInterface  = { DEF_INTERFACE,  false, true,  false, "interface"  };
 static const KindInfo kItem       = { DEF_ITEM,       true,  true,  false, "item"       };
@@ -176,6 +179,11 @@ static const KindInfo kActor      = { DEF_ACTOR,      false, true,  false, "acto
 static const KindInfo kUseCase    = { DEF_USE_CASE,   false, true,  false, "use case"   };
 static const KindInfo kInclude    = { DEF_INCLUDE,    false, true,  false, "include"    };
 static const KindInfo kMessage    = { DEF_MESSAGE,    false, true,  true,  "message"    };
+static const KindInfo kMetadata   = { DEF_METADATA,   false, true,  false, "metadata"   };
+static const KindInfo kVerification = { DEF_VERIFICATION, false, true, false, "verification" };
+static const KindInfo kObjective  = { DEF_OBJECTIVE,  false, true,  true,  "objective"  };
+__attribute__((unused))
+static const KindInfo kSatisfy    = { DEF_SATISFY,    false, true,  true,  "satisfy"    };
 /* `subject e : Engine;` doesn't use the definitionOrUsage() dispatcher;
  * subjectStatement() handles it directly, so there's no KindInfo for
  * it.  The DEF_SUBJECT enum value is still useful as a tag on the
@@ -215,6 +223,24 @@ static Node* dottedReference(void) {
         consume(TOKEN_IDENTIFIER, "Expected name after '.' or '::'.");
         astAppendQualifiedPart(q, parser.previous);
     }
+    /* Optional inline refinement: `name :> X.Y` or `name :>> X.Y`
+     * or `name redefines X.Y`.  Used in connect-end contexts to
+     * declare a one-shot anonymous redefinition.  We parse the
+     * trailing qname for syntactic completeness but discard it for
+     * now — the AST has no slot for per-end refinements.            */
+    if (check(TOKEN_COLON_GREATER) || check(TOKEN_COLON_GREATER_GREATER)
+     || check(TOKEN_REDEFINES)     || check(TOKEN_SUBSETS)
+     || check(TOKEN_SPECIALIZES)) {
+        advance();      /* eat the relationship token */
+        /* Eat one dotted reference and discard. */
+        if (check(TOKEN_IDENTIFIER)) {
+            advance();
+            while (check(TOKEN_DOT) || check(TOKEN_COLON_COLON)) {
+                advance();
+                if (check(TOKEN_IDENTIFIER)) advance();
+            }
+        }
+    }
     return q;
 }
 
@@ -228,11 +254,22 @@ static void parseEndsClause(NodeList* ends, const char* hint) {
     astListAppend(ends, dottedReference());
 }
 
-/*  definition ::= "def" IDENTIFIER featureRelationships? "{" declaration* "}"
- *  Caller has already consumed the kind keyword (e.g. "part", "port").   */
+/*  definition ::= "def" [ "<" IDENT ">" ] IDENTIFIER featureRelationships?
+ *                 "{" declaration* "}"
+ *
+ *  The optional `<short>` annotation introduces an alternate name for
+ *  the def, used by metadata libraries.  We parse it but currently
+ *  drop it — there's no AST slot yet.
+ *
+ *  Caller has already consumed the kind keyword (e.g. "part", "port").  */
 static Node* definition(const KindInfo* k) {
     int line = parser.previous.line;            /* kind keyword just consumed */
     advance();                                  /* eat 'def'                  */
+    /* Optional `<short>` alternate-name annotation. */
+    if (match(TOKEN_LESS)) {
+        if (check(TOKEN_IDENTIFIER)) advance();
+        consume(TOKEN_GREATER, "Expected '>' to close alternate-name annotation.");
+    }
     consume(TOKEN_IDENTIFIER, "Expected definition name.");
     Token name = parser.previous;
 
@@ -336,6 +373,14 @@ static Node* definition(const KindInfo* k) {
  *  for connection (`connect`) or flow (`from`) kinds.                */
 static Node* usage(const KindInfo* k, Direction dir) {
     int line = parser.previous.line;
+
+    /* ---- optional `<short>` alternate-name annotation -------------- */
+    if (match(TOKEN_LESS)) {
+        /* Lexeme can be a quoted-name (`<'1'>`) or bare identifier;
+         * either way we eat one token then expect `>`.                 */
+        if (check(TOKEN_IDENTIFIER)) advance();
+        consume(TOKEN_GREATER, "Expected '>' to close alternate-name annotation.");
+    }
 
     /* ---- optional name ---------------------------------------------- */
     Token name = (Token){0};
@@ -652,7 +697,10 @@ static Node* parseActionRef(void) {
         q->as.qualifiedName.resolved = isStart ? builtinStart() : builtinDone();
         return q;
     }
-    return qualifiedName();
+    /* Action references in succession/transition contexts may use
+     * either `::` (namespace) or `.` (member access through parts).
+     * Use the dottedReference path so `vehicle.doorClosed` parses.  */
+    return dottedReference();
 }
 
 /* Parse the target of a `then` clause.  Either a reference (qname or
@@ -680,6 +728,34 @@ static Node* parseThenTarget(void) {
             consume(TOKEN_RIGHT_BRACE, "Expected '}' to close inline action body.");
         }
         return u;
+    }
+    /* `then fork <name>;` and `then join <name>;` — fork/join are not
+     * SysML keywords in our lexer but appear as bare identifiers
+     * followed by a name in succession contexts.  Recognize the
+     * pattern by matching the literal text and producing a synthetic
+     * action usage that wraps the fork/join name.                    */
+    if (check(TOKEN_IDENTIFIER)
+        && ((parser.current.length == 4
+             && memcmp(parser.current.start, "fork", 4) == 0)
+         || (parser.current.length == 4
+             && memcmp(parser.current.start, "join", 4) == 0))) {
+        Token forkOrJoin = parser.current;
+        /* Lookahead: `fork <name>` is a fork node; otherwise it's just
+         * an identifier reference.  Peek at the next token after the
+         * keyword by tentatively advancing.                           */
+        advance();
+        if (check(TOKEN_IDENTIFIER)) {
+            advance();
+            Node* u = astMakeNode(NODE_USAGE, forkOrJoin.line);
+            u->as.usage.defKind = DEF_ACTION;
+            u->as.usage.name    = parser.previous;
+            return u;
+        }
+        /* No following identifier — treat the keyword itself as the
+         * action ref name.                                            */
+        Node* q = astMakeNode(NODE_QUALIFIED_NAME, forkOrJoin.line);
+        astAppendQualifiedPart(q, forkOrJoin);
+        return q;
     }
     return parseActionRef();
 }
@@ -716,11 +792,12 @@ static Node* parseSuccessionStmt(TokenType kw) {
             astListAppend(&s->as.succession.targets, parseThenTarget());
         }
     } else if (kw == TOKEN_FIRST) {
-        /* `first ref;` — caller wants a one-step chain.  We fold the
-         * `then` target into a follow-up `then` statement; here we
-         * just record `first` with no targets so the body handler
-         * knows where the next `then` continues from.                */
+        /* `first ref [ then target ]+ ;` — record the first reference,
+         * then accept any `then` chain that follows.                  */
         s->as.succession.first = parseActionRef();
+        while (match(TOKEN_THEN)) {
+            astListAppend(&s->as.succession.targets, parseThenTarget());
+        }
     } else {
         /* TOKEN_THEN — bare continuation.  No `first`; just one or
          * more targets (rare, but the spec allows `then a then b;`). */
@@ -807,20 +884,32 @@ static Node* parseTransitionStmt(void) {
      * forms are parse-and-skipped (they need typed AST to model
      * properly).                                                      */
     if (match(TOKEN_ACCEPT)) {
-        if (check(TOKEN_IDENTIFIER) || check(TOKEN_START) || check(TOKEN_DONE)) {
+        /* Detect the `at`/`when` shapes by literal text — neither is
+         * a true keyword in our lexer, so we have to peek manually.   */
+        bool atSubform =
+            check(TOKEN_IDENTIFIER)
+            && ((parser.current.length == 2
+                 && memcmp(parser.current.start, "at", 2) == 0)
+             || (parser.current.length == 4
+                 && memcmp(parser.current.start, "when", 4) == 0));
+        if (atSubform) {
+            /* Eat tokens until we hit a transition continuation kw.    */
+            while (!check(TOKEN_IF) && !check(TOKEN_DO) && !check(TOKEN_THEN)
+                   && !check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
+                advance();
+            }
+        } else if (check(TOKEN_IDENTIFIER) || check(TOKEN_START) || check(TOKEN_DONE)) {
             t->as.transition.accept = qualifiedName();
             if (match(TOKEN_COLON)) {
-                /* Eat the type qname; we don't yet record it.            */
                 qualifiedName();
             }
             if (check(TOKEN_IDENTIFIER) && parser.current.length == 3
                 && memcmp(parser.current.start, "via", 3) == 0) {
-                advance();              /* eat 'via'                     */
+                advance();
                 qualifiedName();
             }
         } else {
-            /* `accept at` / `accept when` and other forms — eat tokens
-             * until we hit a transition continuation keyword.            */
+            /* Other unfamiliar forms — eat to the next continuation.   */
             while (!check(TOKEN_IF) && !check(TOKEN_DO) && !check(TOKEN_THEN)
                    && !check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
                 advance();
@@ -1116,6 +1205,40 @@ Node* declaration(void) {
         result = dependencyDecl();
         if (result) result->as.dependency.visibility = vis;
         vis = VIS_DEFAULT;
+    } else if (check(TOKEN_IDENTIFIER)
+               && (parser.current.length == 4
+                   && (memcmp(parser.current.start, "fork", 4) == 0
+                    || memcmp(parser.current.start, "join", 4) == 0))) {
+        /* `fork fork1;` and `join join1;` — bare-keyword fork/join
+         * declarations that introduce a control-flow node.  Synthesize
+         * an action usage so the rest of the pipeline doesn't choke. */
+        Token forkOrJoin = parser.current;
+        advance();      /* eat fork/join */
+        Node* u = astMakeNode(NODE_USAGE, forkOrJoin.line);
+        u->as.usage.defKind = DEF_ACTION;
+        if (check(TOKEN_IDENTIFIER)) {
+            advance();
+            u->as.usage.name = parser.previous;
+        }
+        consume(TOKEN_SEMICOLON, "Expected ';' after fork/join declaration.");
+        result = u;
+    } else if (check(TOKEN_COLON_GREATER) || check(TOKEN_COLON_GREATER_GREATER)
+            || check(TOKEN_REDEFINES)     || check(TOKEN_SUBSETS)) {
+        /* Bare-prefix anonymous attribute redef: `:>> X::Y = expr;`,
+         * `:> X = expr;`, `redefines X = expr;`.  Common inside snapshot
+         * bodies where the user declares concrete values for inherited
+         * features without re-declaring their kind.  attributeDecl()
+         * already handles unnamed attributes that start with one of
+         * these tokens.                                                */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on anonymous redef.");
+        result = attributeDecl();
+        if (result && result->kind == NODE_ATTRIBUTE) {
+            result->as.attribute.isDerived           = mods.isDerived;
+            result->as.attribute.isAbstract          = mods.isAbstract;
+            result->as.attribute.isConstant          = mods.isConstant;
+            result->as.attribute.isReference         = mods.isReference;
+            result->as.attribute.isReferenceExplicit = mods.isReference;
+        }
     } else if (match(TOKEN_PART))       result = definitionOrUsage(&kPart,       dir, mods);
     else if (match(TOKEN_PORT))         result = definitionOrUsage(&kPort,       dir, mods);
     else if (match(TOKEN_INTERFACE))    result = definitionOrUsage(&kInterface,  dir, mods);
@@ -1158,11 +1281,62 @@ Node* declaration(void) {
     else if (match(TOKEN_VIEWPOINT))    result = definitionOrUsage(&kViewpoint,  dir, mods);
     else if (match(TOKEN_RENDERING))    result = definitionOrUsage(&kRendering,  dir, mods);
     else if (match(TOKEN_CONCERN))      result = definitionOrUsage(&kConcern,    dir, mods);
-    else if (match(TOKEN_VARIANT))      result = definitionOrUsage(&kVariant,    dir, mods);
-    else if (match(TOKEN_VARIATION))    result = definitionOrUsage(&kVariation,  dir, mods);
+    else if (match(TOKEN_VARIANT)) {
+        /* `variant <kind> name : T;` — variant prefix on another kind.
+         * Or just `variant name : T;` for an anonymous variant.       */
+        if (check(TOKEN_PART) || check(TOKEN_PORT) || check(TOKEN_ITEM)
+         || check(TOKEN_ATTRIBUTE) || check(TOKEN_ACTION) || check(TOKEN_STATE)) {
+            /* Re-dispatch on the inner kind keyword with the variant
+             * marker discarded; the AST has no variant flag yet so we
+             * fall back to the inner kind's normal handling.           */
+            return declaration();   /* recurse — current token is the inner kind */
+        }
+        result = definitionOrUsage(&kVariant,    dir, mods);
+    }
+    else if (match(TOKEN_VARIATION)) {
+        /* `variation part def X { ... }` — variation prefix on def.   */
+        if (check(TOKEN_PART) || check(TOKEN_PORT) || check(TOKEN_ITEM)
+         || check(TOKEN_ATTRIBUTE) || check(TOKEN_ACTION) || check(TOKEN_STATE)) {
+            return declaration();
+        }
+        result = definitionOrUsage(&kVariation,  dir, mods);
+    }
     else if (match(TOKEN_ACTOR))        result = definitionOrUsage(&kActor,      dir, mods);
     else if (match(TOKEN_INCLUDE))      result = definitionOrUsage(&kInclude,    dir, mods);
     else if (match(TOKEN_MESSAGE))      result = definitionOrUsage(&kMessage,    dir, mods);
+    else if (match(TOKEN_METADATA))     result = definitionOrUsage(&kMetadata,   dir, mods);
+    else if (match(TOKEN_VERIFICATION)) result = definitionOrUsage(&kVerification, dir, mods);
+    else if (match(TOKEN_OBJECTIVE))    result = definitionOrUsage(&kObjective,  dir, mods);
+    else if (match(TOKEN_SATISFY)) {
+        /* `satisfy <qname> [by <qname>] [{ body }];`                  */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on satisfy.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on satisfy.");
+        int line = parser.previous.line;
+        Node* u = astMakeNode(NODE_USAGE, line);
+        u->as.usage.defKind = DEF_SATISFY;
+        astListAppend(&u->as.usage.types, dottedReference());
+        if (check(TOKEN_IDENTIFIER) && parser.current.length == 2
+            && memcmp(parser.current.start, "by", 2) == 0) {
+            advance();      /* eat 'by' */
+            astListAppend(&u->as.usage.ends, dottedReference());
+        }
+        if (match(TOKEN_LEFT_BRACE)) {
+            skipBracedBlock();
+        } else {
+            consume(TOKEN_SEMICOLON, "Expected ';' or '{' after satisfy.");
+        }
+        result = u;
+    }
+    else if (match(TOKEN_FILTER)) {
+        /* `filter <expr>;` — view-body statement.  Parse-and-skip the
+         * filter expression until ';'.  Common forms: `filter @Safety;`,
+         * `filter @A or @B;`, `filter @SysML::PartUsage;`.            */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on filter.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on filter.");
+        while (!check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) advance();
+        match(TOKEN_SEMICOLON);
+        result = NULL;
+    }
     else if (match(TOKEN_USE)) {
         /* `use case [def] Name [: T] [{...}|;]` — the only valid two-
          * token construct that starts with `use`.  We require the next

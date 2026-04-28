@@ -251,38 +251,43 @@ sml2c --emit-json file.sysml | python tools/render_drawio.py - out.drawio
 
 ## Status
 
-v0.7.  This was a wide-net release for parser coverage.  Adds:
+v0.8.  Continued the wide-net parser-coverage push, focused on the
+Tier 3 / verification / metadata layer plus accumulated long-tail
+fixes.  Adds:
 
-**Connection-form variants:** `connect [n] X.Y to A.B;` (multiplicity-
-prefixed connect with dot-paths on both ends), `bind X = Y;` (equality
-between two feature references), `flow of T from X to Y;` (typed-flow
-shorthand), `allocate X to Y [{...}];`, and `interface I : T [n]
-connect a to b;` (interface usages with inline connect clause).  All
-go through a unified `dottedReference()` helper that accepts both
-`::` and `.` as path separators.
+**Tier 3 keywords (6 new DefKinds):** `metadata def`,
+`verification def`, `objective`, `satisfy <req> by <target> [{body}];`
+(parse-and-skipped body), `filter <expr>;` (view-body parse-and-skip),
+plus `<short>` alternate-name annotations on definitions and usages
+(`metadata def <fm> failureMode;`, `requirement <'1'> spec;`).
 
-**Tier 2 keywords (16 new DefKinds in one batch):** `attribute def`,
-`occurrence`, `event occurrence`, `individual`, `snapshot`,
-`timeslice`, `allocation` (def), `view`, `viewpoint`, `rendering`,
-`concern`, `variant`, `variation`, `actor`, `use case`, `include`,
-`message of T from a to b`.  Most are wired through the standard
-`definitionOrUsage(&KindInfo, ...)` path so they pick up def/usage
-forms, multiplicity, specializes/redefines, and bodies for free.
+**Operators and modifiers:** `xor` boolean operator at PREC_XOR
+(between OR and AND); `nonunique` and `ordered` multiplicity-suffix
+keywords parsed (and silently consumed) after `[*]`; the leading-dot
+real literal `.6` (no leading 0); `::>` lexed as alternate spelling
+of `:>` for connect-end refinement.
 
-**Transition tolerance:** `accept at <expr>`, `accept when <expr>`,
-and `do send new T() to P` no longer error — they parse-and-skip
-silently so downstream constructs aren't blocked.
+**Restructuring fixes:** `variant`/`variation` as prefix on other
+kinds (`variant part X:Y;` recursively dispatches to the inner kind);
+bare-prefix anonymous redef as a top-level statement (`:>> X::Y =
+expr;` inside snapshot bodies); bare-`first ref then target;`
+succession with trailing `then` chains; dotted action references in
+`succession`/`first`/`then` contexts; inline `:>`/`:>>`/`redefines`
+refinement after connect-end refs (parse-and-skipped); `kPart`
+direction allowance for calc/action def parameters (`in part
+vehicle:>X;`); `accept at <expr>` / `accept when <expr>` properly
+detected by literal-text peek (was failing because `at`/`when` are
+bare identifiers); `fork`/`join` as bare-keyword action-flow
+constructs both as standalone declarations and `then`-targets.
 
-**Architecture insight:** Adding 17 DefKinds at once cost ~50 small
-edits across 5 files (codegen_json defKindStr, codegen_sysml defKeyword,
-connectchecker describeNode, ast.c kindLabel arrays both, plus the
-KindInfo entries themselves).  The `-Wswitch` discipline caught every
-missing case at compile time.  This is the strongest argument yet for
-the visitor refactor (still deferred): each new structural kind costs
-the same number of touch points regardless of complexity.
+**PTC reference file: 195 → 87 errors this turn (cumulative
+564 → 87, an 85% reduction since v0.2).**  We're below 100 PTC
+errors for the first time.
 
-PTC reference file: 313 → 195 errors (down 38% this turn; cumulative
-564 → 195 = **65% reduction** since v0.2).
+The cross-cutting tax remains roughly flat at 9-10 files touched per
+turn even with 6 new DefKinds added.  The visitor refactor stays
+deferred — the per-kind edits are mostly mechanical kind-to-string
+mappings that the `-Wswitch` discipline catches at compile time.
 
 ## License & origin
 

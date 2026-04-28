@@ -198,6 +198,7 @@ static const char* opSymbol(TokenType t) {
     case TOKEN_GREATER_EQUAL:  return ">=";
     case TOKEN_AND:            return "and";
     case TOKEN_OR:             return "or";
+    case TOKEN_XOR:            return "xor";
     default:                   return "?";
     }
 }
@@ -284,6 +285,10 @@ static const char* defKeyword(DefKind k) {
     case DEF_USE_CASE:   return "use case";
     case DEF_INCLUDE:    return "include";
     case DEF_MESSAGE:    return "message";
+    case DEF_METADATA:   return "metadata";
+    case DEF_VERIFICATION: return "verification";
+    case DEF_OBJECTIVE:  return "objective";
+    case DEF_SATISFY:    return "satisfy";
     }
     return "?";
 }
@@ -376,6 +381,23 @@ static void emitUsage(S* s, const Node* n) {
         fputs(" to ", s->out);
         if (n->as.usage.ends.count >= 2) {
             emitQualifiedName(s, n->as.usage.ends.items[1]);
+        }
+        fputs(";\n", s->out);
+        return;
+    }
+
+    /* `satisfy <req> [by <target>];` — types[0] is the requirement,
+     * ends[0] is the optional `by` target.  Body is parse-and-skipped
+     * by the parser, so nothing to emit there.                       */
+    if (n->as.usage.defKind == DEF_SATISFY) {
+        emitIndent(s);
+        fputs("satisfy ", s->out);
+        if (n->as.usage.types.count >= 1) {
+            emitQualifiedName(s, n->as.usage.types.items[0]);
+        }
+        if (n->as.usage.ends.count >= 1) {
+            fputs(" by ", s->out);
+            emitQualifiedName(s, n->as.usage.ends.items[0]);
         }
         fputs(";\n", s->out);
         return;

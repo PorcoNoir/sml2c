@@ -94,6 +94,10 @@ static const char* describeNode(const Node* n) {
         case DEF_USE_CASE:   return "use case usage";
         case DEF_INCLUDE:    return "include usage";
         case DEF_MESSAGE:    return "message usage";
+        case DEF_METADATA:   return "metadata usage";
+        case DEF_VERIFICATION: return "verification usage";
+        case DEF_OBJECTIVE:  return "objective usage";
+        case DEF_SATISFY:    return "satisfy usage";
         }
         return "usage";
     case NODE_ATTRIBUTE:  return "attribute";
@@ -186,11 +190,12 @@ static void walk(const Node* n) {
         if (ends->count > 0) {
             bool isFlow = (n->as.usage.defKind == DEF_FLOW
                         || n->as.usage.defKind == DEF_MESSAGE);
-            /* `bind X = Y;` and `allocate X to Y;` do connect feature
-             * references but those features need not be ports — bind
-             * equates any two referenceable features, and allocate
-             * relates arbitrary model elements.  Skip the port check.  */
-            bool skipPortCheck = n->as.usage.isBind || n->as.usage.isAllocate;
+            /* `bind X = Y;`, `allocate X to Y;`, and `satisfy X by Y;`
+             * relate arbitrary model elements (not necessarily ports),
+             * so skip the port check for these connection variants.    */
+            bool skipPortCheck = n->as.usage.isBind
+                              || n->as.usage.isAllocate
+                              || n->as.usage.defKind == DEF_SATISFY;
             if (!skipPortCheck) {
                 /* Parser produces exactly 2 ends; defensive code handles
                  * other counts by treating extras as connection-style. */

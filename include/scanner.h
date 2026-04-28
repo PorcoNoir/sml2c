@@ -165,6 +165,16 @@ typedef enum {
     TOKEN_MESSAGE,
     TOKEN_USE,                                     /* `use case ...` introducer */
 
+    /* Tier 3 keywords — viewpoint/verification/metadata layer.       */
+    TOKEN_METADATA,         /* `metadata def Safety { ... }`          */
+    TOKEN_VERIFICATION,     /* `verification def MassTest;`           */
+    TOKEN_OBJECTIVE,        /* `objective :MaximizeObjective;`        */
+    TOKEN_SATISFY,          /* `satisfy X by Y { ... }`               */
+    TOKEN_FILTER,           /* `filter @Safety;` view-body statement  */
+    TOKEN_XOR,              /* boolean xor — operator                  */
+    TOKEN_NONUNIQUE,        /* multiplicity modifier                  */
+    TOKEN_ORDERED,          /* multiplicity modifier                  */
+
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,
     TOKEN_EOF
