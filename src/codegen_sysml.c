@@ -160,10 +160,13 @@ static void emitMultiplicity(S* s, const Node* m) {
 
 /* Emit an endpoint clause (the `connect a to b` or `from a to b`
  * tail of a connection/flow usage).  Empty list emits nothing.    */
+/* Emit an endpoint clause (the `connect a to b` or `from a to b`
+ * tail of a connection/flow/message/interface usage).  Empty list
+ * emits nothing.                                                    */
 static void emitEnds(S* s, DefKind kind, const NodeList* ends) {
     if (ends->count == 0) return;
-    if (kind == DEF_FLOW) fputs(" from ", s->out);
-    else                  fputs(" connect ", s->out);
+    if (kind == DEF_FLOW || kind == DEF_MESSAGE) fputs(" from ",    s->out);
+    else                                          fputs(" connect ", s->out);   /* connection or interface */
     /* Parser produces exactly two ends; defensive code handles other
      * counts as a comma-list (won't actually trigger).             */
     if (ends->count >= 1) emitQualifiedName(s, ends->items[0]);
@@ -264,6 +267,23 @@ static const char* defKeyword(DefKind k) {
     case DEF_ACTION:     return "action";
     case DEF_STATE:      return "state";
     case DEF_CALC:       return "calc";
+    case DEF_ATTRIBUTE_DEF: return "attribute";
+    case DEF_OCCURRENCE: return "occurrence";
+    case DEF_EVENT:      return "event occurrence";
+    case DEF_INDIVIDUAL: return "individual";
+    case DEF_SNAPSHOT:   return "snapshot";
+    case DEF_TIMESLICE:  return "timeslice";
+    case DEF_ALLOCATION: return "allocation";
+    case DEF_VIEW:       return "view";
+    case DEF_VIEWPOINT:  return "viewpoint";
+    case DEF_RENDERING:  return "rendering";
+    case DEF_CONCERN:    return "concern";
+    case DEF_VARIANT:    return "variant";
+    case DEF_VARIATION:  return "variation";
+    case DEF_ACTOR:      return "actor";
+    case DEF_USE_CASE:   return "use case";
+    case DEF_INCLUDE:    return "include";
+    case DEF_MESSAGE:    return "message";
     }
     return "?";
 }
@@ -328,6 +348,39 @@ static void emitEnumValue(S* s, const Node* n) {
 }
 
 static void emitUsage(S* s, const Node* n) {
+    /* `bind X = Y;` is a connection-usage variant with two ends but
+     * a different surface form.  Short-circuit before the general
+     * usage emission path so we don't print `connection connect`.   */
+    if (n->as.usage.isBind) {
+        emitIndent(s);
+        fputs("bind ", s->out);
+        if (n->as.usage.ends.count >= 1) {
+            emitQualifiedName(s, n->as.usage.ends.items[0]);
+        }
+        fputs(" = ", s->out);
+        if (n->as.usage.ends.count >= 2) {
+            emitQualifiedName(s, n->as.usage.ends.items[1]);
+        }
+        fputs(";\n", s->out);
+        return;
+    }
+
+    /* `allocate X to Y;` — same shape as bind, different keyword.  We
+     * don't preserve the optional body since it's parse-and-skipped.  */
+    if (n->as.usage.isAllocate) {
+        emitIndent(s);
+        fputs("allocate ", s->out);
+        if (n->as.usage.ends.count >= 1) {
+            emitQualifiedName(s, n->as.usage.ends.items[0]);
+        }
+        fputs(" to ", s->out);
+        if (n->as.usage.ends.count >= 2) {
+            emitQualifiedName(s, n->as.usage.ends.items[1]);
+        }
+        fputs(";\n", s->out);
+        return;
+    }
+
     emitIndent(s);
     emitVisibility(s, n->as.usage.visibility);
     emitAssertKind(s, n->as.usage.assertKind);

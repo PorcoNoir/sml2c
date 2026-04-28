@@ -122,6 +122,24 @@ void synchronize(void) {
         case TOKEN_PERFORM:
         case TOKEN_RETURN:
         case TOKEN_CALC:
+        case TOKEN_BIND:
+        case TOKEN_ALLOCATE:
+        case TOKEN_OCCURRENCE:
+        case TOKEN_EVENT:
+        case TOKEN_INDIVIDUAL:
+        case TOKEN_SNAPSHOT:
+        case TOKEN_TIMESLICE:
+        case TOKEN_ALLOCATION:
+        case TOKEN_VIEW:
+        case TOKEN_VIEWPOINT:
+        case TOKEN_RENDERING:
+        case TOKEN_CONCERN:
+        case TOKEN_VARIANT:
+        case TOKEN_VARIATION:
+        case TOKEN_ACTOR:
+        case TOKEN_INCLUDE:
+        case TOKEN_MESSAGE:
+        case TOKEN_USE:
         case TOKEN_ABSTRACT:    /* feature modifiers can begin a decl */
         case TOKEN_DERIVED:
         case TOKEN_CONSTANT:

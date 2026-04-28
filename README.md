@@ -251,21 +251,38 @@ sml2c --emit-json file.sysml | python tools/render_drawio.py - out.drawio
 
 ## Status
 
-v0.6.  Adds calc def (`calc def F { in p : T; return r : T = expr; }`),
-function-call expressions (`Compute(mass, factor)`), and member-access
-expressions (`engine.mass`, `vehicle.engine.cost`).  Together these
-complete the core *expression* grammar — every initializer expression
-in real SysML is now parseable, and the AST distinguishes namespace
-lookup (`A::B`) from runtime member access (`a.b`).  The
-referentialchecker no longer pollutes round-trip emit (v0.5 fix);
-calls and member access live in expression position only.
+v0.7.  This was a wide-net release for parser coverage.  Adds:
 
-The big design pivot of v0.6: `.` is now strictly the member-access
-operator in expression contexts, distinct from `::` which remains the
-qualified-name separator.  Pre-v0.6, `engine.mass` parsed as the
-single qualified name `engine::mass`; post-v0.6 it produces a
-NODE_MEMBER_ACCESS that the typechecker (v0.10) can resolve through
-the engine's type to find `mass`.
+**Connection-form variants:** `connect [n] X.Y to A.B;` (multiplicity-
+prefixed connect with dot-paths on both ends), `bind X = Y;` (equality
+between two feature references), `flow of T from X to Y;` (typed-flow
+shorthand), `allocate X to Y [{...}];`, and `interface I : T [n]
+connect a to b;` (interface usages with inline connect clause).  All
+go through a unified `dottedReference()` helper that accepts both
+`::` and `.` as path separators.
+
+**Tier 2 keywords (16 new DefKinds in one batch):** `attribute def`,
+`occurrence`, `event occurrence`, `individual`, `snapshot`,
+`timeslice`, `allocation` (def), `view`, `viewpoint`, `rendering`,
+`concern`, `variant`, `variation`, `actor`, `use case`, `include`,
+`message of T from a to b`.  Most are wired through the standard
+`definitionOrUsage(&KindInfo, ...)` path so they pick up def/usage
+forms, multiplicity, specializes/redefines, and bodies for free.
+
+**Transition tolerance:** `accept at <expr>`, `accept when <expr>`,
+and `do send new T() to P` no longer error — they parse-and-skip
+silently so downstream constructs aren't blocked.
+
+**Architecture insight:** Adding 17 DefKinds at once cost ~50 small
+edits across 5 files (codegen_json defKindStr, codegen_sysml defKeyword,
+connectchecker describeNode, ast.c kindLabel arrays both, plus the
+KindInfo entries themselves).  The `-Wswitch` discipline caught every
+missing case at compile time.  This is the strongest argument yet for
+the visitor refactor (still deferred): each new structural kind costs
+the same number of touch points regardless of complexity.
+
+PTC reference file: 313 → 195 errors (down 38% this turn; cumulative
+564 → 195 = **65% reduction** since v0.2).
 
 ## License & origin
 

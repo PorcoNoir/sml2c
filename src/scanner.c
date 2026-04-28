@@ -213,6 +213,25 @@ static TokenType identifierType(void) {
     KW("perform",     TOKEN_PERFORM);
     KW("return",      TOKEN_RETURN);
     KW("calc",        TOKEN_CALC);
+    KW("bind",        TOKEN_BIND);
+    KW("of",          TOKEN_OF);
+    KW("allocate",    TOKEN_ALLOCATE);
+    KW("occurrence",  TOKEN_OCCURRENCE);
+    KW("event",       TOKEN_EVENT);
+    KW("individual",  TOKEN_INDIVIDUAL);
+    KW("snapshot",    TOKEN_SNAPSHOT);
+    KW("timeslice",   TOKEN_TIMESLICE);
+    KW("allocation",  TOKEN_ALLOCATION);
+    KW("view",        TOKEN_VIEW);
+    KW("viewpoint",   TOKEN_VIEWPOINT);
+    KW("rendering",   TOKEN_RENDERING);
+    KW("concern",     TOKEN_CONCERN);
+    KW("variant",     TOKEN_VARIANT);
+    KW("variation",   TOKEN_VARIATION);
+    KW("actor",       TOKEN_ACTOR);
+    KW("include",     TOKEN_INCLUDE);
+    KW("message",     TOKEN_MESSAGE);
+    KW("use",         TOKEN_USE);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -496,6 +515,25 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_PERFORM:        return "PERFORM";
     case TOKEN_RETURN:         return "RETURN";
     case TOKEN_CALC:           return "CALC";
+    case TOKEN_BIND:           return "BIND";
+    case TOKEN_OF:             return "OF";
+    case TOKEN_ALLOCATE:       return "ALLOCATE";
+    case TOKEN_OCCURRENCE:     return "OCCURRENCE";
+    case TOKEN_EVENT:          return "EVENT";
+    case TOKEN_INDIVIDUAL:     return "INDIVIDUAL";
+    case TOKEN_SNAPSHOT:       return "SNAPSHOT";
+    case TOKEN_TIMESLICE:      return "TIMESLICE";
+    case TOKEN_ALLOCATION:     return "ALLOCATION";
+    case TOKEN_VIEW:           return "VIEW";
+    case TOKEN_VIEWPOINT:      return "VIEWPOINT";
+    case TOKEN_RENDERING:      return "RENDERING";
+    case TOKEN_CONCERN:        return "CONCERN";
+    case TOKEN_VARIANT:        return "VARIANT";
+    case TOKEN_VARIATION:      return "VARIATION";
+    case TOKEN_ACTOR:          return "ACTOR";
+    case TOKEN_INCLUDE:        return "INCLUDE";
+    case TOKEN_MESSAGE:        return "MESSAGE";
+    case TOKEN_USE:            return "USE";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }

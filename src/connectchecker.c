@@ -77,6 +77,23 @@ static const char* describeNode(const Node* n) {
         case DEF_ACTION:     return "action usage";
         case DEF_STATE:      return "state usage";
         case DEF_CALC:       return "calc usage";
+        case DEF_ATTRIBUTE_DEF: return "attribute def";
+        case DEF_OCCURRENCE: return "occurrence usage";
+        case DEF_EVENT:      return "event usage";
+        case DEF_INDIVIDUAL: return "individual usage";
+        case DEF_SNAPSHOT:   return "snapshot usage";
+        case DEF_TIMESLICE:  return "timeslice usage";
+        case DEF_ALLOCATION: return "allocation usage";
+        case DEF_VIEW:       return "view usage";
+        case DEF_VIEWPOINT:  return "viewpoint usage";
+        case DEF_RENDERING:  return "rendering usage";
+        case DEF_CONCERN:    return "concern usage";
+        case DEF_VARIANT:    return "variant usage";
+        case DEF_VARIATION:  return "variation usage";
+        case DEF_ACTOR:      return "actor usage";
+        case DEF_USE_CASE:   return "use case usage";
+        case DEF_INCLUDE:    return "include usage";
+        case DEF_MESSAGE:    return "message usage";
         }
         return "usage";
     case NODE_ATTRIBUTE:  return "attribute";
@@ -167,15 +184,23 @@ static void walk(const Node* n) {
     case NODE_USAGE: {
         const NodeList* ends = &n->as.usage.ends;
         if (ends->count > 0) {
-            bool isFlow = (n->as.usage.defKind == DEF_FLOW);
-            /* Parser produces exactly 2 ends; defensive code handles
-             * other counts by treating extras as connection-style. */
-            for (int i = 0; i < ends->count; i++) {
-                EndRole role;
-                if (isFlow && i == 0)      role = END_FLOW_FROM;
-                else if (isFlow && i == 1) role = END_FLOW_TO;
-                else                       role = END_CONNECT;
-                checkEnd(ends->items[i], role);
+            bool isFlow = (n->as.usage.defKind == DEF_FLOW
+                        || n->as.usage.defKind == DEF_MESSAGE);
+            /* `bind X = Y;` and `allocate X to Y;` do connect feature
+             * references but those features need not be ports — bind
+             * equates any two referenceable features, and allocate
+             * relates arbitrary model elements.  Skip the port check.  */
+            bool skipPortCheck = n->as.usage.isBind || n->as.usage.isAllocate;
+            if (!skipPortCheck) {
+                /* Parser produces exactly 2 ends; defensive code handles
+                 * other counts by treating extras as connection-style. */
+                for (int i = 0; i < ends->count; i++) {
+                    EndRole role;
+                    if (isFlow && i == 0)      role = END_FLOW_FROM;
+                    else if (isFlow && i == 1) role = END_FLOW_TO;
+                    else                       role = END_CONNECT;
+                    checkEnd(ends->items[i], role);
+                }
             }
         }
         for (int i = 0; i < n->as.usage.memberCount; i++) {

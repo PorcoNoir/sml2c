@@ -160,6 +160,22 @@ static const KindInfo kRequirement= { DEF_REQUIREMENT,false, true,  false, "requ
 static const KindInfo kAction     = { DEF_ACTION,     false, true,  false, "action"     };
 static const KindInfo kState      = { DEF_STATE,      false, true,  false, "state"      };
 static const KindInfo kCalc       = { DEF_CALC,       false, true,  false, "calc"       };
+static const KindInfo kAttributeDef= { DEF_ATTRIBUTE_DEF, false, true, false, "attribute" };
+static const KindInfo kOccurrence = { DEF_OCCURRENCE, false, true,  false, "occurrence" };
+static const KindInfo kIndividual = { DEF_INDIVIDUAL, false, true,  false, "individual" };
+static const KindInfo kSnapshot   = { DEF_SNAPSHOT,   false, true,  false, "snapshot"   };
+static const KindInfo kTimeslice  = { DEF_TIMESLICE,  false, true,  false, "timeslice"  };
+static const KindInfo kAllocation = { DEF_ALLOCATION, false, true,  false, "allocation" };
+static const KindInfo kView       = { DEF_VIEW,       false, true,  false, "view"       };
+static const KindInfo kViewpoint  = { DEF_VIEWPOINT,  false, true,  false, "viewpoint"  };
+static const KindInfo kRendering  = { DEF_RENDERING,  false, true,  false, "rendering"  };
+static const KindInfo kConcern    = { DEF_CONCERN,    false, true,  false, "concern"    };
+static const KindInfo kVariant    = { DEF_VARIANT,    false, true,  false, "variant"    };
+static const KindInfo kVariation  = { DEF_VARIATION,  false, true,  false, "variation"  };
+static const KindInfo kActor      = { DEF_ACTOR,      false, true,  false, "actor"      };
+static const KindInfo kUseCase    = { DEF_USE_CASE,   false, true,  false, "use case"   };
+static const KindInfo kInclude    = { DEF_INCLUDE,    false, true,  false, "include"    };
+static const KindInfo kMessage    = { DEF_MESSAGE,    false, true,  true,  "message"    };
 /* `subject e : Engine;` doesn't use the definitionOrUsage() dispatcher;
  * subjectStatement() handles it directly, so there's no KindInfo for
  * it.  The DEF_SUBJECT enum value is still useful as a tag on the
@@ -169,14 +185,47 @@ static const KindInfo kCalc       = { DEF_CALC,       false, true,  false, "calc
  * not definitionOrUsage().                                          */
 static const KindInfo kReference  = { DEF_REFERENCE,  false, false, false, "reference"  };
 
+/* Forward declarations needed before allocateStatement / metadata
+ * helpers that reference them.                                      */
+static void skipBracedBlock(void);
+
+/* Parse a feature-reference path used as a connect/flow endpoint:
+ *
+ *      [ '[' expr ']' ]?  IDENT ( ('.' | '::') IDENT )*
+ *
+ * The optional bracket prefix is a multiplicity that some real SysML
+ * code attaches to a connect end (`connect [1] X.Y to [1] A.B`).
+ * We accept and silently consume it for now — the AST has no slot
+ * for per-end multiplicities yet.                                    */
+static Node* dottedReference(void) {
+    /* Optional leading `[expr]` — eat it bracket-balanced. */
+    if (match(TOKEN_LEFT_BRACKET)) {
+        int depth = 1;
+        while (depth > 0 && !check(TOKEN_EOF)) {
+            if      (match(TOKEN_LEFT_BRACKET))  depth++;
+            else if (match(TOKEN_RIGHT_BRACKET)) depth--;
+            else advance();
+        }
+    }
+    consume(TOKEN_IDENTIFIER, "Expected reference name.");
+    Node* q = astMakeNode(NODE_QUALIFIED_NAME, parser.previous.line);
+    astAppendQualifiedPart(q, parser.previous);
+    while (check(TOKEN_DOT) || check(TOKEN_COLON_COLON)) {
+        advance();
+        consume(TOKEN_IDENTIFIER, "Expected name after '.' or '::'.");
+        astAppendQualifiedPart(q, parser.previous);
+    }
+    return q;
+}
+
 /* Parse a "connect a to b" or "from a to b" clause.  Caller has
  * already consumed the opening keyword (CONNECT or FROM).  Appends
- * exactly two qualified-name nodes to the given list.                */
+ * exactly two reference nodes to the given list.                     */
 static void parseEndsClause(NodeList* ends, const char* hint) {
-    astListAppend(ends, qualifiedName());
-    consume(TOKEN_TO, "Expected 'to' in this clause.");
     (void)hint;
-    astListAppend(ends, qualifiedName());
+    astListAppend(ends, dottedReference());
+    consume(TOKEN_TO, "Expected 'to' in this clause.");
+    astListAppend(ends, dottedReference());
 }
 
 /*  definition ::= "def" IDENTIFIER featureRelationships? "{" declaration* "}"
@@ -310,7 +359,11 @@ static Node* usage(const KindInfo* k, Direction dir) {
         if (!anonRelOk
             && (!k->allowsAnonymous
                 || (k->kind == DEF_CONNECTION && !check(TOKEN_CONNECT))
-                || (k->kind == DEF_FLOW       && !check(TOKEN_FROM)))) {
+                || (k->kind == DEF_INTERFACE  && !check(TOKEN_CONNECT))
+                || (k->kind == DEF_FLOW       && !check(TOKEN_FROM)
+                                              && !check(TOKEN_OF))
+                || (k->kind == DEF_MESSAGE    && !check(TOKEN_FROM)
+                                              && !check(TOKEN_OF)))) {
             consume(TOKEN_IDENTIFIER, "Expected name.");
         }
     }
@@ -318,11 +371,22 @@ static Node* usage(const KindInfo* k, Direction dir) {
 
     FeatureRels rels = parseFeatureRelationships();
 
+    /* `flow of T from X to Y;` and `message of T from X to Y;` —
+     * `of` is an alternate type-clause keyword used in flow- and
+     * message-usage positions.  Splice the type into rels.types so
+     * downstream code treats it identically to a `: T` clause.       */
+    if ((k->kind == DEF_FLOW || k->kind == DEF_MESSAGE)
+        && match(TOKEN_OF)) {
+        appendQualifiedNameList(&rels.types);
+    }
+
     /* ---- optional endpoint clause ----------------------------------- */
     NodeList ends = {0};
-    if (k->kind == DEF_CONNECTION && match(TOKEN_CONNECT)) {
+    if ((k->kind == DEF_CONNECTION || k->kind == DEF_INTERFACE)
+        && match(TOKEN_CONNECT)) {
         parseEndsClause(&ends, "connector");
-    } else if (k->kind == DEF_FLOW && match(TOKEN_FROM)) {
+    } else if ((k->kind == DEF_FLOW || k->kind == DEF_MESSAGE)
+               && match(TOKEN_FROM)) {
         parseEndsClause(&ends, "flow");
     }
 
@@ -449,6 +513,45 @@ static Node* connectStatement(void) {
     u->as.usage.defKind = DEF_CONNECTION;
     parseEndsClause(&u->as.usage.ends, "connector");
     consume(TOKEN_SEMICOLON, "Expected ';' after connect statement.");
+    return u;
+}
+
+/* `bind X = Y;` — connect-like equality between two feature references.
+ * Stored as a connection usage with isBind=true and ends = [lhs, rhs].
+ * The `=` is part of the syntax, not a default-value assignment.     */
+static Node* bindStatement(void) {
+    int line = parser.previous.line;            /* TOKEN_BIND consumed   */
+    Node* u = astMakeNode(NODE_USAGE, line);
+    u->as.usage.defKind = DEF_CONNECTION;
+    u->as.usage.isBind  = true;
+    astListAppend(&u->as.usage.ends, dottedReference());
+    consume(TOKEN_EQUAL, "Expected '=' in bind statement.");
+    astListAppend(&u->as.usage.ends, dottedReference());
+    consume(TOKEN_SEMICOLON, "Expected ';' after bind statement.");
+    return u;
+}
+
+/* `allocate X to Y [ { body } ];` — connection variant indicating an
+ * allocation relationship, optionally with a body of cross-references.
+ * Body content is parse-and-skipped for now (not modeled in AST).    */
+static Node* allocateStatement(void) {
+    int line = parser.previous.line;            /* TOKEN_ALLOCATE eaten  */
+    Node* u = astMakeNode(NODE_USAGE, line);
+    u->as.usage.defKind    = DEF_CONNECTION;
+    u->as.usage.isAllocate = true;
+    /* Optional name: `allocate myAlloc : SomeType allocate X to Y` is
+     * sometimes seen, but the simpler `allocate X to Y` form is more
+     * common.  We support both: an identifier here means the allocate
+     * has a name, otherwise it's anonymous.  Distinguish by lookahead:
+     * if the second token after IDENTIFIER is `to`, it's an end ref.   */
+    /* For v0.7 we just go with anonymous form. */
+    parseEndsClause(&u->as.usage.ends, "allocate");
+    /* Optional body — parse-and-skip until matching `}`.              */
+    if (match(TOKEN_LEFT_BRACE)) {
+        skipBracedBlock();
+        return u;
+    }
+    consume(TOKEN_SEMICOLON, "Expected ';' or '{' after allocate ends.");
     return u;
 }
 
@@ -692,25 +795,32 @@ static Node* parseTransitionStmt(void) {
     if (match(TOKEN_FIRST)) {
         t->as.transition.first = qualifiedName();
     }
-    /* Optional `accept <event>`.  Reject the via/at/when sub-forms.  */
+    /* Optional `accept <event>` and its sub-forms.
+     *
+     *   accept e               : simple event ref
+     *   accept e:T             : typed event ref
+     *   accept e via port      : with via clause
+     *   accept at <expr>       : time-based — `accept at maintenanceTime`
+     *   accept when <expr>     : guard-based — `accept when temp > Tmax`
+     *
+     * The simple/typed/via forms produce a qname accept; the at/when
+     * forms are parse-and-skipped (they need typed AST to model
+     * properly).                                                      */
     if (match(TOKEN_ACCEPT)) {
         if (check(TOKEN_IDENTIFIER) || check(TOKEN_START) || check(TOKEN_DONE)) {
             t->as.transition.accept = qualifiedName();
-            /* Accept may be followed by `:Type` and/or `via port` —
-             * not yet supported.                                       */
             if (match(TOKEN_COLON)) {
-                error("'accept evt:Type' form is not yet supported.");
-                qualifiedName();        /* consume to recover            */
+                /* Eat the type qname; we don't yet record it.            */
+                qualifiedName();
             }
             if (check(TOKEN_IDENTIFIER) && parser.current.length == 3
                 && memcmp(parser.current.start, "via", 3) == 0) {
-                error("'accept ... via port' form is not yet supported.");
                 advance();              /* eat 'via'                     */
                 qualifiedName();
             }
         } else {
-            error("'accept at ...' and 'accept when ...' forms are not yet supported.");
-            /* Eat tokens until we see `if`, `do`, `then`, or `;`.       */
+            /* `accept at` / `accept when` and other forms — eat tokens
+             * until we hit a transition continuation keyword.            */
             while (!check(TOKEN_IF) && !check(TOKEN_DO) && !check(TOKEN_THEN)
                    && !check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
                 advance();
@@ -721,11 +831,12 @@ static Node* parseTransitionStmt(void) {
     if (match(TOKEN_IF)) {
         t->as.transition.guard = expression();
     }
-    /* Optional `do <action>`.  Reject `do send new ...` for now.       */
+    /* Optional `do <action>`.  Simple form is `do <qname>`.  The
+     * `do send new T() to P` effect form is parse-and-skipped.       */
     if (match(TOKEN_DO)) {
         if (check(TOKEN_IDENTIFIER) && parser.current.length == 4
             && memcmp(parser.current.start, "send", 4) == 0) {
-            error("'do send ...' effect form is not yet supported.");
+            /* Eat tokens up to `then` / `;`.                            */
             while (!check(TOKEN_THEN) && !check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
                 advance();
             }
@@ -1017,6 +1128,57 @@ Node* declaration(void) {
     else if (match(TOKEN_REQUIREMENT))  result = definitionOrUsage(&kRequirement,dir, mods);
     else if (match(TOKEN_ACTION))       result = definitionOrUsage(&kAction,     dir, mods);
     else if (match(TOKEN_STATE))        result = definitionOrUsage(&kState,      dir, mods);
+
+    /* Tier 2 keywords — same KindInfo path as the structural kinds.
+     * `event occurrence x;` is a special case: the `event` keyword
+     * sets the event flag and the rest of the parse continues as an
+     * occurrence usage.  We model that by recognizing TOKEN_EVENT,
+     * setting the flag on the result, and recursing.                  */
+    else if (match(TOKEN_OCCURRENCE))   result = definitionOrUsage(&kOccurrence, dir, mods);
+    else if (match(TOKEN_EVENT)) {
+        /* `event occurrence x;`.  Eat `occurrence`, parse as occurrence
+         * usage, mark the resulting node with the event flag.          */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on event.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on event.");
+        if (!match(TOKEN_OCCURRENCE)) {
+            errorAtCurrent("Expected 'occurrence' after 'event'.");
+            result = NULL;
+        } else {
+            result = definitionOrUsage(&kOccurrence, dir, mods);
+            if (result && result->kind == NODE_USAGE) {
+                result->as.usage.defKind = DEF_EVENT;
+            }
+        }
+    }
+    else if (match(TOKEN_INDIVIDUAL))   result = definitionOrUsage(&kIndividual, dir, mods);
+    else if (match(TOKEN_SNAPSHOT))     result = definitionOrUsage(&kSnapshot,   dir, mods);
+    else if (match(TOKEN_TIMESLICE))    result = definitionOrUsage(&kTimeslice,  dir, mods);
+    else if (match(TOKEN_ALLOCATION))   result = definitionOrUsage(&kAllocation, dir, mods);
+    else if (match(TOKEN_VIEW))         result = definitionOrUsage(&kView,       dir, mods);
+    else if (match(TOKEN_VIEWPOINT))    result = definitionOrUsage(&kViewpoint,  dir, mods);
+    else if (match(TOKEN_RENDERING))    result = definitionOrUsage(&kRendering,  dir, mods);
+    else if (match(TOKEN_CONCERN))      result = definitionOrUsage(&kConcern,    dir, mods);
+    else if (match(TOKEN_VARIANT))      result = definitionOrUsage(&kVariant,    dir, mods);
+    else if (match(TOKEN_VARIATION))    result = definitionOrUsage(&kVariation,  dir, mods);
+    else if (match(TOKEN_ACTOR))        result = definitionOrUsage(&kActor,      dir, mods);
+    else if (match(TOKEN_INCLUDE))      result = definitionOrUsage(&kInclude,    dir, mods);
+    else if (match(TOKEN_MESSAGE))      result = definitionOrUsage(&kMessage,    dir, mods);
+    else if (match(TOKEN_USE)) {
+        /* `use case [def] Name [: T] [{...}|;]` — the only valid two-
+         * token construct that starts with `use`.  We require the next
+         * token be the bare identifier `case` (we never made it a
+         * proper keyword since it appears nowhere else).               */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on use case.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on use case.");
+        if (!check(TOKEN_IDENTIFIER) || parser.current.length != 4
+            || memcmp(parser.current.start, "case", 4) != 0) {
+            errorAtCurrent("Expected 'case' after 'use'.");
+            result = NULL;
+        } else {
+            advance();      /* eat 'case' */
+            result = definitionOrUsage(&kUseCase, dir, mods);
+        }
+    }
     else if (match(TOKEN_EXHIBIT)) {
         /* `exhibit state s [: T] [{ … }]` — state-flavoured usage.
          * The `state` keyword is required to follow.                  */
@@ -1214,16 +1376,35 @@ Node* declaration(void) {
         if (hasAnyModifier(mods)) error("Feature modifiers are not valid on connect.");
         result = connectStatement();
     }
+    else if (match(TOKEN_BIND)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on bind.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on bind.");
+        result = bindStatement();
+    }
+    else if (match(TOKEN_ALLOCATE)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on allocate.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on allocate.");
+        result = allocateStatement();
+    }
     else if (match(TOKEN_ATTRIBUTE)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on an attribute.");
-        result = attributeDecl();
-        /* Attributes accept all four modifiers (they're usages). */
-        if (result && result->kind == NODE_ATTRIBUTE) {
-            result->as.attribute.isDerived           = mods.isDerived;
-            result->as.attribute.isAbstract          = mods.isAbstract;
-            result->as.attribute.isConstant          = mods.isConstant;
-            result->as.attribute.isReference         = mods.isReference;
-            result->as.attribute.isReferenceExplicit = mods.isReference;
+        /* `attribute def Name [:> Parent];`  — full definition shape.
+         * Route through definitionOrUsage so the def/usage dispatch
+         * works correctly.  For the usage path, use attributeDecl()
+         * which has the special handling for redefines/specializes
+         * shortcuts.                                                  */
+        if (check(TOKEN_DEF)) {
+            result = definitionOrUsage(&kAttributeDef, dir, mods);
+        } else {
+            result = attributeDecl();
+            /* Attributes accept all four modifiers (they're usages). */
+            if (result && result->kind == NODE_ATTRIBUTE) {
+                result->as.attribute.isDerived           = mods.isDerived;
+                result->as.attribute.isAbstract          = mods.isAbstract;
+                result->as.attribute.isConstant          = mods.isConstant;
+                result->as.attribute.isReference         = mods.isReference;
+                result->as.attribute.isReferenceExplicit = mods.isReference;
+            }
         }
     } else {
         /* Bare-form usage (§8.3.6.3 ReferenceUsage): no kind keyword,

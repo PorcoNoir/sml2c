@@ -73,7 +73,27 @@ typedef enum {
     DEF_SUBJECT,            /* `subject e : Engine;` inside a requirement def */
     DEF_ACTION,             /* `action def A { … }` / `action a : A` */
     DEF_STATE,              /* `state def S { … }` / `state s : S`, `exhibit state s` */
-    DEF_CALC                /* `calc def F { in p : T; return r : T = expr; }` */
+    DEF_CALC,               /* `calc def F { in p : T; return r : T = expr; }` */
+    DEF_ATTRIBUTE_DEF,      /* `attribute def AttrName :> ParentType;` */
+
+    /* Tier 2 — parse with structure but limited semantic checking
+     * for now.  Full modeling deferred to typed-AST work.            */
+    DEF_OCCURRENCE,         /* `occurrence o : O;` */
+    DEF_EVENT,              /* `event occurrence e;` — event flag on occurrence */
+    DEF_INDIVIDUAL,         /* `individual def X :> Y;`  — instance-snapshot hierarchy */
+    DEF_SNAPSHOT,           /* `snapshot t0_v : Vehicle_1 { … }` */
+    DEF_TIMESLICE,          /* `timeslice t : T { … }` */
+    DEF_ALLOCATION,         /* `allocation def A { … }` / `allocation a : A` */
+    DEF_VIEW,               /* `view def V { … }` / `view v : V` */
+    DEF_VIEWPOINT,          /* `viewpoint def VP { … }` */
+    DEF_RENDERING,          /* `rendering def R { … }` */
+    DEF_CONCERN,            /* `concern def C { … }` / `concern c : C` */
+    DEF_VARIANT,            /* `variant v : V` — variation usage */
+    DEF_VARIATION,          /* `variation def V { … }` — variation definition */
+    DEF_ACTOR,              /* `actor def A { … }` / `actor a : A` */
+    DEF_USE_CASE,           /* `use case def U { … }` / `use case u : U` */
+    DEF_INCLUDE,            /* `include u : U` — include use-case usage */
+    DEF_MESSAGE             /* `message m of T from a to b;` */
 } DefKind;
 
 /* The `assert` / `assume` / `require` modifier on a constraint or
@@ -177,6 +197,8 @@ struct Node {
             bool       isReference; /* BasicUsagePrefix: `ref` (after referential pass) */
             bool       isReferenceExplicit; /* user wrote `ref` in source           */
             bool       isPerform;   /* `perform action a : T;`            */
+            bool       isBind;      /* `bind X = Y;` connection variant   */
+            bool       isAllocate;  /* `allocate X to Y { ... }` variant  */
             AssertKind assertKind;  /* assert/assume/require              */
             NodeList   types;       /* `: A, B`                           */
             NodeList   specializes; /* `:> X, Y`                          */

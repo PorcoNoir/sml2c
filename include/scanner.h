@@ -132,6 +132,39 @@ typedef enum {
      * `calc def F { in p : T; return r : T = expr; }`.                */
     TOKEN_CALC,
 
+    /* `bind X = Y;` — a connection variant equating two referenceable
+     * features.  Modeled as a connection usage with `isBind` set.    */
+    TOKEN_BIND,
+
+    /* `flow of T from X to Y;` — typed-flow shorthand where `of` is
+     * an alternate type keyword used only in flow-usage position.   */
+    TOKEN_OF,
+
+    /* `allocate X to Y [ { ... } ];` — connection variant indicating
+     * one element is allocated to another.  Modeled as a connection
+     * usage with `isAllocate` set.                                  */
+    TOKEN_ALLOCATE,
+
+    /* Tier 2 keywords — full AST modeling but limited semantic
+     * checking for now.  Parsed via the standard definitionOrUsage
+     * path with KindInfo entries for each.                          */
+    TOKEN_OCCURRENCE,
+    TOKEN_EVENT,
+    TOKEN_INDIVIDUAL,
+    TOKEN_SNAPSHOT,
+    TOKEN_TIMESLICE,
+    TOKEN_ALLOCATION,
+    TOKEN_VIEW,
+    TOKEN_VIEWPOINT,
+    TOKEN_RENDERING,
+    TOKEN_CONCERN,
+    TOKEN_VARIANT,
+    TOKEN_VARIATION,
+    TOKEN_ACTOR,
+    TOKEN_INCLUDE,
+    TOKEN_MESSAGE,
+    TOKEN_USE,                                     /* `use case ...` introducer */
+
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,
     TOKEN_EOF

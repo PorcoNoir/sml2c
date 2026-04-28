@@ -160,7 +160,24 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "?SubjectDef",  /* subjects have no def form; sentinel        */
         "ActionDef",
         "StateDef",
-        "CalcDef"
+        "CalcDef",
+        "AttributeDef",
+        "OccurrenceDef",
+        "EventDef",
+        "IndividualDef",
+        "SnapshotDef",
+        "TimesliceDef",
+        "AllocationDef",
+        "ViewDef",
+        "ViewpointDef",
+        "RenderingDef",
+        "ConcernDef",
+        "VariantDef",
+        "VariationDef",
+        "ActorDef",
+        "UseCaseDef",
+        "IncludeDef",
+        "MessageDef"
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
@@ -173,7 +190,24 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "Subject",
         "Action",
         "State",
-        "Calc"
+        "Calc",
+        "AttributeUse",
+        "Occurrence",
+        "Event",
+        "Individual",
+        "Snapshot",
+        "Timeslice",
+        "Allocation",
+        "View",
+        "Viewpoint",
+        "Rendering",
+        "Concern",
+        "Variant",
+        "Variation",
+        "Actor",
+        "UseCase",
+        "Include",
+        "Message"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";

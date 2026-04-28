@@ -104,6 +104,23 @@ static const char* defKindStr(DefKind k) {
     case DEF_ACTION:     return "ActionDef";
     case DEF_STATE:      return "StateDef";
     case DEF_CALC:       return "CalcDef";
+    case DEF_ATTRIBUTE_DEF: return "AttributeDef";
+    case DEF_OCCURRENCE: return "OccurrenceDef";
+    case DEF_EVENT:      return "EventDef";
+    case DEF_INDIVIDUAL: return "IndividualDef";
+    case DEF_SNAPSHOT:   return "SnapshotDef";
+    case DEF_TIMESLICE:  return "TimesliceDef";
+    case DEF_ALLOCATION: return "AllocationDef";
+    case DEF_VIEW:       return "ViewDef";
+    case DEF_VIEWPOINT:  return "ViewpointDef";
+    case DEF_RENDERING:  return "RenderingDef";
+    case DEF_CONCERN:    return "ConcernDef";
+    case DEF_VARIANT:    return "VariantDef";
+    case DEF_VARIATION:  return "VariationDef";
+    case DEF_ACTOR:      return "ActorDef";
+    case DEF_USE_CASE:   return "UseCaseDef";
+    case DEF_INCLUDE:    return "IncludeDef";
+    case DEF_MESSAGE:    return "MessageDef";
     }
     return "?";
 }
@@ -386,6 +403,8 @@ static void emitUsage(J* j, const Node* n) {
     sep(j, &first); emitFieldBool(j, "isConstant",  n->as.usage.isConstant);
     sep(j, &first); emitFieldBool(j, "isReference", n->as.usage.isReference);
     sep(j, &first); emitFieldBool(j, "isPerform",   n->as.usage.isPerform);
+    sep(j, &first); emitFieldBool(j, "isBind",      n->as.usage.isBind);
+    sep(j, &first); emitFieldBool(j, "isAllocate",  n->as.usage.isAllocate);
     sep(j, &first); emitKey(j, "types");        emitNodeList(j, &n->as.usage.types);
     sep(j, &first); emitKey(j, "specializes");  emitNodeList(j, &n->as.usage.specializes);
     sep(j, &first); emitKey(j, "redefines");    emitNodeList(j, &n->as.usage.redefines);
