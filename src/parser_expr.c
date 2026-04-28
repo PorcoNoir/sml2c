@@ -135,11 +135,28 @@ static Node* identifierExpr(void) {
     return q;
 }
 
-/* `( expr )` — parens for grouping, no AST node of their own.        */
+/* `( expr )` — single-expression grouping.  Or `( expr , expr , ... )`
+ * — tuple-style expression list (used in SysML for vector literals
+ * like `(0,0,0)` and feature collections like `(a.x, b.y, c.z)`).
+ * For now we collapse a tuple into a synthetic NODE_CALL with a
+ * sentinel callee; this preserves the AST round-trip without adding
+ * a new NodeKind.                                                    */
 static Node* grouping(void) {
-    Node* inner = expression();
+    Node* first = expression();
+    if (match(TOKEN_COMMA)) {
+        /* It's a tuple — wrap as a CALL with no callee.              */
+        int line = first->line;
+        Node* tup = astMakeNode(NODE_CALL, line);
+        tup->as.call.callee = NULL;
+        astListAppend(&tup->as.call.args, first);
+        do {
+            astListAppend(&tup->as.call.args, expression());
+        } while (match(TOKEN_COMMA));
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after tuple expression.");
+        return tup;
+    }
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after expression.");
-    return inner;
+    return first;
 }
 
 /* Prefix `-` or `!`. */
@@ -229,6 +246,7 @@ static const ParseRule rules[TOKEN_EOF + 1] = {
     [TOKEN_AND]             = { NULL,           binaryExpr,  PREC_AND        },
     [TOKEN_OR]              = { NULL,           binaryExpr,  PREC_OR         },
     [TOKEN_XOR]             = { NULL,           binaryExpr,  PREC_XOR        },
+    [TOKEN_META]            = { NULL,           binaryExpr,  PREC_OR         },
     /* Everything else: implicit { NULL, NULL, PREC_NONE }.            */
 };
 

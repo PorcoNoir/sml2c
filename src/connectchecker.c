@@ -98,6 +98,7 @@ static const char* describeNode(const Node* n) {
         case DEF_VERIFICATION: return "verification usage";
         case DEF_OBJECTIVE:  return "objective usage";
         case DEF_SATISFY:    return "satisfy usage";
+        case DEF_ANALYSIS:   return "analysis usage";
         }
         return "usage";
     case NODE_ATTRIBUTE:  return "attribute";

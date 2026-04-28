@@ -1,4 +1,4 @@
-package BadAssertion {
+package Assertion {
     private import ScalarValues::*;
 
     constraint def C {
@@ -8,7 +8,8 @@ package BadAssertion {
 
     part def Engine {
         attribute t : Real;
-        // Missing assert/assume/require prefix — parser should reject.
+        // v0.9: bare constraint usages without prefix are now accepted
+        // (real SysML uses these constantly).
         constraint c : C;
     }
 }

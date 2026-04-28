@@ -120,7 +120,7 @@ static Node* attributeDecl(void) {
      * SysML keyword form `default expression`.  Both produce the same
      * AST shape.                                                      */
     Node* defaultValue = NULL;
-    if (match(TOKEN_EQUAL)) {
+    if (match(TOKEN_EQUAL) || match(TOKEN_DEFAULT)) {
         defaultValue = expression();
     }
 
@@ -184,6 +184,7 @@ static const KindInfo kVerification = { DEF_VERIFICATION, false, true, false, "v
 static const KindInfo kObjective  = { DEF_OBJECTIVE,  false, true,  true,  "objective"  };
 __attribute__((unused))
 static const KindInfo kSatisfy    = { DEF_SATISFY,    false, true,  true,  "satisfy"    };
+static const KindInfo kAnalysis   = { DEF_ANALYSIS,   false, true,  false, "analysis"   };
 /* `subject e : Engine;` doesn't use the definitionOrUsage() dispatcher;
  * subjectStatement() handles it directly, so there's no KindInfo for
  * it.  The DEF_SUBJECT enum value is still useful as a tag on the
@@ -196,6 +197,7 @@ static const KindInfo kReference  = { DEF_REFERENCE,  false, false, false, "refe
 /* Forward declarations needed before allocateStatement / metadata
  * helpers that reference them.                                      */
 static void skipBracedBlock(void);
+static void skipMetadataPrefix(void);
 
 /* Parse a feature-reference path used as a connect/flow endpoint:
  *
@@ -296,14 +298,23 @@ static Node* definition(const KindInfo* k) {
      * traffic-light enumerations).                                    */
     if (k->kind == DEF_ENUM) {
         while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-            if (!match(TOKEN_IDENTIFIER)) {
-                errorAtCurrent("Expected enumeration value name.");
-                advance();
-                if (parser.panicMode) synchronize();
-                continue;
+            /* Optional bare `enum` keyword introducer for anonymous
+             * enum values: `enum = 60 [mm];`.  Eat it; the value is
+             * still a regular enum value, just with no name.          */
+            bool anon = false;
+            if (match(TOKEN_ENUM)) anon = true;
+
+            Token vname = (Token){0};
+            if (!anon) {
+                if (!match(TOKEN_IDENTIFIER)) {
+                    errorAtCurrent("Expected enumeration value name.");
+                    advance();
+                    if (parser.panicMode) synchronize();
+                    continue;
+                }
+                vname = parser.previous;
             }
-            Token vname = parser.previous;
-            int vline = vname.line;
+            int vline = vname.length > 0 ? vname.line : parser.previous.line;
             Node* initializer = NULL;
             if (match(TOKEN_EQUAL)) {
                 initializer = expression();
@@ -374,6 +385,12 @@ static Node* definition(const KindInfo* k) {
 static Node* usage(const KindInfo* k, Direction dir) {
     int line = parser.previous.line;
 
+    /* Metadata annotations may precede the name in a usage too:
+     *     end #logical logicalEnd;
+     *     end #original ::> vehicleSpecification.vehicleMassRequirement;
+     * Eat them before continuing.                                     */
+    skipMetadataPrefix();
+
     /* ---- optional `<short>` alternate-name annotation -------------- */
     if (match(TOKEN_LESS)) {
         /* Lexeme can be a quoted-name (`<'1'>`) or bare identifier;
@@ -384,9 +401,25 @@ static Node* usage(const KindInfo* k, Direction dir) {
 
     /* ---- optional name ---------------------------------------------- */
     Token name = (Token){0};
+    Node* anonFlowSource = NULL;        /* set if we reinterpret a name */
     if (check(TOKEN_IDENTIFIER)) {
         advance();
         name = parser.previous;
+        /* In flow/message contexts, if the next token is `.`, the
+         * "name" we just consumed was actually the first segment of a
+         * dotted source reference: `flow a.b to c.d;`.  Build a qname
+         * starting from this identifier and treat the flow as
+         * anonymous with an implicit `from`-style source ref.          */
+        if ((k->kind == DEF_FLOW || k->kind == DEF_MESSAGE)
+            && (check(TOKEN_DOT) || check(TOKEN_TO))) {
+            anonFlowSource = astMakeNode(NODE_QUALIFIED_NAME, name.line);
+            astAppendQualifiedPart(anonFlowSource, name);
+            while (match(TOKEN_DOT)) {
+                consume(TOKEN_IDENTIFIER, "Expected name after '.'.");
+                astAppendQualifiedPart(anonFlowSource, parser.previous);
+            }
+            name = (Token){0};       /* drop the misread name */
+        }
     } else {
         /* A bare relationship token (`:`, `:>`, `:>>`, `redefines`,
          * `subsets`, `specializes`, `[`) implies an anonymous usage —
@@ -400,7 +433,9 @@ static Node* usage(const KindInfo* k, Direction dir) {
                       || check(TOKEN_COLON_GREATER_GREATER)
                       || check(TOKEN_REDEFINES) || check(TOKEN_SPECIALIZES)
                       || check(TOKEN_SUBSETS)
-                      || check(TOKEN_LEFT_BRACKET);
+                      || check(TOKEN_LEFT_BRACKET)
+                      /* `constraint { expr }` — anonymous inline constraint. */
+                      || (k->kind == DEF_CONSTRAINT && check(TOKEN_LEFT_BRACE));
         if (!anonRelOk
             && (!k->allowsAnonymous
                 || (k->kind == DEF_CONNECTION && !check(TOKEN_CONNECT))
@@ -427,12 +462,29 @@ static Node* usage(const KindInfo* k, Direction dir) {
 
     /* ---- optional endpoint clause ----------------------------------- */
     NodeList ends = {0};
-    if ((k->kind == DEF_CONNECTION || k->kind == DEF_INTERFACE)
+    if (anonFlowSource) {
+        /* Pre-built source ref from the name reinterpretation above.   */
+        astListAppend(&ends, anonFlowSource);
+        if (match(TOKEN_TO)) {
+            astListAppend(&ends, dottedReference());
+        }
+    } else if ((k->kind == DEF_CONNECTION || k->kind == DEF_INTERFACE)
         && match(TOKEN_CONNECT)) {
         parseEndsClause(&ends, "connector");
     } else if ((k->kind == DEF_FLOW || k->kind == DEF_MESSAGE)
                && match(TOKEN_FROM)) {
         parseEndsClause(&ends, "flow");
+    } else if (k->kind == DEF_FLOW
+               && (check(TOKEN_IDENTIFIER) || check(TOKEN_LEFT_BRACKET))
+               && name.length == 0
+               && rels.types.count == 0) {
+        /* Anonymous unnamed flow short-form: `flow a.b to c.d;`
+         * (no `from` keyword).  Real SysML uses this constantly.
+         * The `from` is implicit; the first ref is the source.       */
+        astListAppend(&ends, dottedReference());
+        if (match(TOKEN_TO)) {
+            astListAppend(&ends, dottedReference());
+        }
     }
 
     Node* u = astMakeNode(NODE_USAGE, line);
@@ -445,11 +497,44 @@ static Node* usage(const KindInfo* k, Direction dir) {
     u->as.usage.multiplicity = rels.multiplicity;
     u->as.usage.ends         = ends;
 
+    /* Action-usage tail clauses we don't yet model:
+     *
+     *   action trigger1 accept ignitionCmd:T via portRef;
+     *   action sendStatus send es via portRef { ... }
+     *   action a parallel { ... }
+     *
+     * Parse-and-skip everything after the keyword until the next `;`
+     * or `{` so the rest of the body stays parseable.                 */
+    if (k->kind == DEF_ACTION
+        && (check(TOKEN_ACCEPT) || check(TOKEN_IDENTIFIER))) {
+        bool isSend = check(TOKEN_IDENTIFIER) && parser.current.length == 4
+                   && memcmp(parser.current.start, "send", 4) == 0;
+        bool isParallel = check(TOKEN_IDENTIFIER) && parser.current.length == 8
+                       && memcmp(parser.current.start, "parallel", 8) == 0;
+        if (check(TOKEN_ACCEPT) || isSend || isParallel) {
+            advance();      /* eat the tail keyword */
+            while (!check(TOKEN_SEMICOLON) && !check(TOKEN_LEFT_BRACE)
+                   && !check(TOKEN_EOF)) {
+                advance();
+            }
+        }
+    }
+
     /* Optional initializer: `= expression` before the closing `;`.
      * Currently used by bare-ref usages (`ref nominalTorque : Real = 100;`)
      * but allowed on any kind for symmetry with attribute usages.  */
     if (match(TOKEN_EQUAL)) {
         u->as.usage.defaultValue = expression();
+    }
+
+    /* Constraint usages with an inline expression body: `constraint
+     * { mass > 0 }` or `constraint c : C { mass > 0 }`.  The body is
+     * a single boolean expression, not a list of member declarations.
+     * No trailing `;` is required.                                    */
+    if (k->kind == DEF_CONSTRAINT && match(TOKEN_LEFT_BRACE)) {
+        u->as.usage.body = expression();
+        consume(TOKEN_RIGHT_BRACE, "Expected '}' to close inline constraint body.");
+        return u;
     }
 
     if (match(TOKEN_LEFT_BRACE)) {
@@ -530,15 +615,12 @@ static Node* definitionOrUsage(const KindInfo* k, Direction dir, FeatureModifier
     if (dir != DIR_NONE && !k->allowsDirection) {
         error("Direction modifier is not valid on this kind of usage.");
     }
-    /* Constraint usages still require an explicit assertion prefix
-     * per the v0.x design decision — bare `constraint c : C;` is
-     * reserved for a future extension.  Requirements have an
-     * established bare-form pattern (`requirement spec { … }` for
-     * declaring a named requirement group), so we accept those.    */
-    if (k->kind == DEF_CONSTRAINT) {
-        error("Constraint usage requires an 'assert', 'assume', or "
-              "'require' prefix.");
-    }
+    /* Constraint usages historically required an `assert`/`assume`/
+     * `require` prefix (a v0.2 design choice).  Real SysML files use
+     * the bare form constantly — `constraint { x > 0 }`,
+     * `constraint c : C;` — so we now accept both.  The asserted
+     * forms are handled separately by assertedConstraintOrRequirement
+     * and reach this path only when no assertion keyword was seen.   */
     Node* u = usage(k, dir);
     if (u && u->kind == NODE_USAGE) {
         u->as.usage.isDerived           = m.isDerived;
@@ -822,16 +904,18 @@ static Node* parseLifecycleAction(LifecycleKind kind) {
     Node* la = astMakeNode(NODE_LIFECYCLE_ACTION, line);
     la->as.lifecycleAction.kind = kind;
 
-    /* Reject the inline `entry action <name>;` form for now — it
-     * requires synthesizing an action declaration alongside the
-     * lifecycle ref, which we'll add when the use case demands.    */
-    if (check(TOKEN_ACTION)) {
-        error("Inline action declaration after entry/do/exit is not "
-              "yet supported; declare the action separately and "
-              "reference it by name.");
-        advance();      /* eat 'action' to make progress */
+    /* `entry action <name>;` and similar inline forms — the `action`
+     * keyword is optional sugar that affirms the lifecycle target is
+     * an action.  We don't yet synthesize a separate action decl so
+     * the keyword is silently consumed and we treat the rest as a
+     * regular action ref.                                            */
+    (void)match(TOKEN_ACTION);
+    /* Accept dotted paths too: `entry vehicle.driveAction;`.         */
+    la->as.lifecycleAction.action = dottedReference();
+    /* Optional inline body — `entry action a { ... };` — parse-and-skip. */
+    if (match(TOKEN_LEFT_BRACE)) {
+        skipBracedBlock();
     }
-    la->as.lifecycleAction.action = qualifiedName();
     consume(TOKEN_SEMICOLON, "Expected ';' after lifecycle action.");
     return la;
 }
@@ -1259,18 +1343,27 @@ Node* declaration(void) {
      * setting the flag on the result, and recursing.                  */
     else if (match(TOKEN_OCCURRENCE))   result = definitionOrUsage(&kOccurrence, dir, mods);
     else if (match(TOKEN_EVENT)) {
-        /* `event occurrence x;`.  Eat `occurrence`, parse as occurrence
-         * usage, mark the resulting node with the event flag.          */
+        /* `event occurrence x;` — full form.  Eat `occurrence`, parse
+         * as occurrence usage, set defKind to DEF_EVENT.
+         * `event <ref>.<port>;` — short form for declaring an event
+         * usage that references an existing occurrence.  Parse as a
+         * synthetic event usage with the qname stored in `types`.    */
         if (dir != DIR_NONE) error("Direction modifier is not valid on event.");
         if (hasAnyModifier(mods)) error("Feature modifiers are not valid on event.");
-        if (!match(TOKEN_OCCURRENCE)) {
-            errorAtCurrent("Expected 'occurrence' after 'event'.");
-            result = NULL;
-        } else {
+        if (match(TOKEN_OCCURRENCE)) {
             result = definitionOrUsage(&kOccurrence, dir, mods);
             if (result && result->kind == NODE_USAGE) {
                 result->as.usage.defKind = DEF_EVENT;
             }
+        } else {
+            /* Short form: just an event-ref statement.  Eat the
+             * dotted reference and trailing `;`.                       */
+            int line = parser.previous.line;
+            Node* u = astMakeNode(NODE_USAGE, line);
+            u->as.usage.defKind = DEF_EVENT;
+            astListAppend(&u->as.usage.types, dottedReference());
+            consume(TOKEN_SEMICOLON, "Expected ';' after event reference.");
+            result = u;
         }
     }
     else if (match(TOKEN_INDIVIDUAL))   result = definitionOrUsage(&kIndividual, dir, mods);
@@ -1302,11 +1395,24 @@ Node* declaration(void) {
         result = definitionOrUsage(&kVariation,  dir, mods);
     }
     else if (match(TOKEN_ACTOR))        result = definitionOrUsage(&kActor,      dir, mods);
-    else if (match(TOKEN_INCLUDE))      result = definitionOrUsage(&kInclude,    dir, mods);
+    else if (match(TOKEN_INCLUDE)) {
+        /* `include use case <name> :> <ref>;` — common form for
+         * including a use case usage in another use case body.  We
+         * eat the `use case` introducer if present and treat it
+         * uniformly with bare `include <name>`.                       */
+        if (match(TOKEN_USE)) {
+            if (check(TOKEN_IDENTIFIER) && parser.current.length == 4
+                && memcmp(parser.current.start, "case", 4) == 0) {
+                advance();      /* eat 'case' */
+            }
+        }
+        result = definitionOrUsage(&kInclude, dir, mods);
+    }
     else if (match(TOKEN_MESSAGE))      result = definitionOrUsage(&kMessage,    dir, mods);
     else if (match(TOKEN_METADATA))     result = definitionOrUsage(&kMetadata,   dir, mods);
     else if (match(TOKEN_VERIFICATION)) result = definitionOrUsage(&kVerification, dir, mods);
     else if (match(TOKEN_OBJECTIVE))    result = definitionOrUsage(&kObjective,  dir, mods);
+    else if (match(TOKEN_ANALYSIS))     result = definitionOrUsage(&kAnalysis,   dir, mods);
     else if (match(TOKEN_SATISFY)) {
         /* `satisfy <qname> [by <qname>] [{ body }];`                  */
         if (dir != DIR_NONE) error("Direction modifier is not valid on satisfy.");

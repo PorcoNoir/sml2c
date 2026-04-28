@@ -181,7 +181,8 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "MetadataDef",
         "VerificationDef",
         "ObjectiveDef",
-        "SatisfyDef"
+        "SatisfyDef",
+        "AnalysisDef"
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
@@ -215,7 +216,8 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "Metadata",
         "Verification",
         "Objective",
-        "Satisfy"
+        "Satisfy",
+        "Analysis"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -267,6 +269,7 @@ static const char* operatorSymbol(TokenType t) {
     case TOKEN_AND:            return "and";
     case TOKEN_OR:             return "or";
     case TOKEN_XOR:            return "xor";
+    case TOKEN_META:           return "meta";
     default:                   return "?";
     }
 }
@@ -299,7 +302,7 @@ static void emitExpression(const Node* e) {
         printf(")");
         break;
     case NODE_CALL:
-        emitExpression(e->as.call.callee);
+        if (e->as.call.callee) emitExpression(e->as.call.callee);
         printf("(");
         for (int i = 0; i < e->as.call.args.count; i++) {
             if (i > 0) printf(", ");

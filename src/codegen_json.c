@@ -125,6 +125,7 @@ static const char* defKindStr(DefKind k) {
     case DEF_VERIFICATION: return "VerificationDef";
     case DEF_OBJECTIVE:  return "ObjectiveDef";
     case DEF_SATISFY:    return "SatisfyDef";
+    case DEF_ANALYSIS:   return "AnalysisDef";
     }
     return "?";
 }
@@ -186,6 +187,7 @@ static const char* opSym(TokenType t) {
     case TOKEN_AND:            return "and";
     case TOKEN_OR:             return "or";
     case TOKEN_XOR:            return "xor";
+    case TOKEN_META:           return "meta";
     default:                   return "?";
     }
 }

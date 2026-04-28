@@ -240,6 +240,9 @@ static TokenType identifierType(void) {
     KW("xor",         TOKEN_XOR);
     KW("nonunique",   TOKEN_NONUNIQUE);
     KW("ordered",     TOKEN_ORDERED);
+    KW("meta",        TOKEN_META);
+    KW("default",     TOKEN_DEFAULT);
+    KW("analysis",    TOKEN_ANALYSIS);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -563,6 +566,9 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_XOR:            return "XOR";
     case TOKEN_NONUNIQUE:      return "NONUNIQUE";
     case TOKEN_ORDERED:        return "ORDERED";
+    case TOKEN_META:           return "META";
+    case TOKEN_DEFAULT:        return "DEFAULT";
+    case TOKEN_ANALYSIS:       return "ANALYSIS";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }

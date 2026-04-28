@@ -199,6 +199,7 @@ static const char* opSymbol(TokenType t) {
     case TOKEN_AND:            return "and";
     case TOKEN_OR:             return "or";
     case TOKEN_XOR:            return "xor";
+    case TOKEN_META:           return "meta";
     default:                   return "?";
     }
 }
@@ -227,7 +228,10 @@ static void emitExpression(S* s, const Node* expr) {
         emitExpression(s, expr->as.unary.operand);
         break;
     case NODE_CALL:
-        emitExpression(s, expr->as.call.callee);
+        /* No-callee form is a tuple: `(a, b, c)`.                     */
+        if (expr->as.call.callee) {
+            emitExpression(s, expr->as.call.callee);
+        }
         fputc('(', s->out);
         for (int i = 0; i < expr->as.call.args.count; i++) {
             if (i > 0) fputs(", ", s->out);
@@ -289,6 +293,7 @@ static const char* defKeyword(DefKind k) {
     case DEF_VERIFICATION: return "verification";
     case DEF_OBJECTIVE:  return "objective";
     case DEF_SATISFY:    return "satisfy";
+    case DEF_ANALYSIS:   return "analysis";
     }
     return "?";
 }
@@ -344,7 +349,12 @@ static bool isEnumValue(const Node* n) {
 
 static void emitEnumValue(S* s, const Node* n) {
     emitIndent(s);
-    emitToken(s, n->as.attribute.name);
+    if (n->as.attribute.name.length > 0) {
+        emitToken(s, n->as.attribute.name);
+    } else {
+        /* Anonymous enum value (`enum = 60;`) — emit the keyword. */
+        fputs("enum", s->out);
+    }
     if (n->as.attribute.defaultValue) {
         fputs(" = ", s->out);
         emitExpression(s, n->as.attribute.defaultValue);

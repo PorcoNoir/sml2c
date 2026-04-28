@@ -174,6 +174,9 @@ typedef enum {
     TOKEN_XOR,              /* boolean xor — operator                  */
     TOKEN_NONUNIQUE,        /* multiplicity modifier                  */
     TOKEN_ORDERED,          /* multiplicity modifier                  */
+    TOKEN_META,             /* `<feature> meta <type>` — metaclass cast */
+    TOKEN_DEFAULT,          /* `attribute X default <expr>;` — keyword form of `=` */
+    TOKEN_ANALYSIS,         /* `analysis name { ... }` */
 
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,

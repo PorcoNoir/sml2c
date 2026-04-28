@@ -97,7 +97,8 @@ typedef enum {
     DEF_METADATA,           /* `metadata def Safety { ... }` */
     DEF_VERIFICATION,       /* `verification def MassTest;` */
     DEF_OBJECTIVE,          /* `objective :MaximizeObjective;` */
-    DEF_SATISFY             /* `satisfy X by Y { ... }` — assertion */
+    DEF_SATISFY,            /* `satisfy X by Y { ... }` — assertion */
+    DEF_ANALYSIS            /* `analysis name { ... }` */
 } DefKind;
 
 /* The `assert` / `assume` / `require` modifier on a constraint or

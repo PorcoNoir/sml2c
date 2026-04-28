@@ -251,43 +251,44 @@ sml2c --emit-json file.sysml | python tools/render_drawio.py - out.drawio
 
 ## Status
 
-v0.8.  Continued the wide-net parser-coverage push, focused on the
-Tier 3 / verification / metadata layer plus accumulated long-tail
-fixes.  Adds:
+v0.9.  Long-tail cleanup: lots of small parser features that closed
+the gap on the PTC reference file from 87 errors to 49 (and 564 → 49
+cumulative since v0.2 — **a 91% reduction**).  Adds:
 
-**Tier 3 keywords (6 new DefKinds):** `metadata def`,
-`verification def`, `objective`, `satisfy <req> by <target> [{body}];`
-(parse-and-skipped body), `filter <expr>;` (view-body parse-and-skip),
-plus `<short>` alternate-name annotations on definitions and usages
-(`metadata def <fm> failureMode;`, `requirement <'1'> spec;`).
+**Operators and forms:**
+- `meta` infix operator (`<feature> meta <type>`)
+- `default <expr>` keyword form of `=` initializer
+- `xor` boolean operator (was v0.8 but also in this layer)
+- Tuple expressions `(a, b, c)` — modeled as NODE_CALL with no callee
+- Anonymous flow with implicit `from`: `flow a.b to c.d;` and `flow a to b;`
+  — the parser reinterprets the first identifier as a source ref when
+  followed by `.` or `to`
 
-**Operators and modifiers:** `xor` boolean operator at PREC_XOR
-(between OR and AND); `nonunique` and `ordered` multiplicity-suffix
-keywords parsed (and silently consumed) after `[*]`; the leading-dot
-real literal `.6` (no leading 0); `::>` lexed as alternate spelling
-of `:>` for connect-end refinement.
+**Body/statement forms:**
+- Bare `constraint { expr };` without assertion prefix — dropped the
+  v0.2 strict rule; usage parser handles inline expression body for
+  DEF_CONSTRAINT (terminated by `}`, no `;` needed)
+- Anonymous enum values: `enum = 60;`, `enum = 80;` inside enum
+  bodies; emitter renders the keyword for unnamed values
+- `entry/do/exit action <name> [{body}];` — silently consume optional
+  `action` keyword and inline body in lifecycle actions
+- `accept`/`send`/`parallel` tail clauses on action usages —
+  parse-and-skip until `;` or `{`
+- `event <ref>;` short-form event-reference statement (no `occurrence`)
+- `#metadata` annotations also work at the start of a usage (not just
+  declaration) — `end #logical logicalEnd;`
+- `include use case <name>;` — multi-token form recognized
 
-**Restructuring fixes:** `variant`/`variation` as prefix on other
-kinds (`variant part X:Y;` recursively dispatches to the inner kind);
-bare-prefix anonymous redef as a top-level statement (`:>> X::Y =
-expr;` inside snapshot bodies); bare-`first ref then target;`
-succession with trailing `then` chains; dotted action references in
-`succession`/`first`/`then` contexts; inline `:>`/`:>>`/`redefines`
-refinement after connect-end refs (parse-and-skipped); `kPart`
-direction allowance for calc/action def parameters (`in part
-vehicle:>X;`); `accept at <expr>` / `accept when <expr>` properly
-detected by literal-text peek (was failing because `at`/`when` are
-bare identifiers); `fork`/`join` as bare-keyword action-flow
-constructs both as standalone declarations and `then`-targets.
+**New DefKind:**
+- `DEF_ANALYSIS` for `analysis name { ... }` blocks
 
-**PTC reference file: 195 → 87 errors this turn (cumulative
-564 → 87, an 85% reduction since v0.2).**  We're below 100 PTC
-errors for the first time.
+**Test bookkeeping:**
+- `test/bad/BadAssertion.sysml` → `test/Assertion.sysml` (the strict
+  prefix rule it tested is gone)
+- New `test/LongTail.sysml` exercises most of the above
 
-The cross-cutting tax remains roughly flat at 9-10 files touched per
-turn even with 6 new DefKinds added.  The visitor refactor stays
-deferred — the per-kind edits are mostly mechanical kind-to-string
-mappings that the `-Wswitch` discipline catches at compile time.
+The cross-cutting tax this turn: 9 files touched.  Roughly flat per-turn
+even as the parser keeps growing.
 
 ## License & origin
 
