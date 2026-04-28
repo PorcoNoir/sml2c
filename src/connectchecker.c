@@ -76,6 +76,7 @@ static const char* describeNode(const Node* n) {
         case DEF_SUBJECT:    return "subject";
         case DEF_ACTION:     return "action usage";
         case DEF_STATE:      return "state usage";
+        case DEF_CALC:       return "calc usage";
         }
         return "usage";
     case NODE_ATTRIBUTE:  return "attribute";

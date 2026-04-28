@@ -120,6 +120,8 @@ void synchronize(void) {
         case TOKEN_EXIT:
         case TOKEN_DO:
         case TOKEN_PERFORM:
+        case TOKEN_RETURN:
+        case TOKEN_CALC:
         case TOKEN_ABSTRACT:    /* feature modifiers can begin a decl */
         case TOKEN_DERIVED:
         case TOKEN_CONSTANT:

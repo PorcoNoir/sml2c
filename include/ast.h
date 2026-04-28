@@ -38,7 +38,10 @@ typedef enum {
     NODE_DEPENDENCY,      /* dependency [Name] from A,B to C,D;           */
     NODE_SUCCESSION,      /* succession ['name'] [first ref] (then ref)+  */
     NODE_TRANSITION,      /* transition [name] [first src] [accept E] [if G] [do A] then T */
-    NODE_LIFECYCLE_ACTION /* entry/do/exit ref;  inside a state body      */
+    NODE_LIFECYCLE_ACTION,/* entry/do/exit ref;  inside a state body      */
+    NODE_RETURN,          /* return [name] [: T] [= expr];   in a calc def body */
+    NODE_CALL,            /* f(arg, arg, …)   function-call expression    */
+    NODE_MEMBER_ACCESS    /* a.b.c            dot-chain expression        */
 } NodeKind;
 
 /* Which flavor of literal a NODE_LITERAL holds.  String literals don't
@@ -69,7 +72,8 @@ typedef enum {
     DEF_REQUIREMENT,        /* `requirement def R { … }` / `require requirement r : R` */
     DEF_SUBJECT,            /* `subject e : Engine;` inside a requirement def */
     DEF_ACTION,             /* `action def A { … }` / `action a : A` */
-    DEF_STATE               /* `state def S { … }` / `state s : S`, `exhibit state s` */
+    DEF_STATE,              /* `state def S { … }` / `state s : S`, `exhibit state s` */
+    DEF_CALC                /* `calc def F { in p : T; return r : T = expr; }` */
 } DefKind;
 
 /* The `assert` / `assume` / `require` modifier on a constraint or
@@ -366,6 +370,35 @@ struct Node {
             LifecycleKind kind;
             Node*         action;     /* qualified-name ref to an action */
         } lifecycleAction;
+
+        /* RETURN — `return [name] [: T] [= expr];`  Used inside calc
+         * def bodies to declare the result feature.  `name`, `types`
+         * and `defaultValue` are all optional but at least one must
+         * be present (parser enforces).                                */
+        struct {
+            Token    name;            /* length==0 if anonymous          */
+            NodeList types;           /* `: T` (zero or one entries)     */
+            NodeList specializes;     /* `:> X` for derived feature kind */
+            Node*    defaultValue;    /* `= expr` (the returned value)   */
+        } ret;
+
+        /* CALL — function-call expression `callee(arg, arg, …)`.
+         * `callee` is any expression (most commonly a NODE_QUALIFIED_NAME
+         * naming a calc def).  Arguments are positional expressions.
+         * Lives in expression contexts only (attribute initializers,
+         * binary operands, return values).                              */
+        struct {
+            Node*    callee;
+            NodeList args;
+        } call;
+
+        /* MEMBER_ACCESS — `target.member`.  Left-associative dot chain;
+         * `target.a.b` parses as ((target.a).b).  For typing, each step
+         * resolves `member` in the type context of `target`'s type.    */
+        struct {
+            Node* target;             /* any expression                  */
+            Token member;             /* identifier of the member name   */
+        } memberAccess;
     } as;
 };
 

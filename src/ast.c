@@ -159,7 +159,8 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "RequirementDef",
         "?SubjectDef",  /* subjects have no def form; sentinel        */
         "ActionDef",
-        "StateDef"
+        "StateDef",
+        "CalcDef"
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
@@ -171,7 +172,8 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "Requirement",
         "Subject",
         "Action",
-        "State"
+        "State",
+        "Calc"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -252,6 +254,20 @@ static void emitExpression(const Node* e) {
         printf("(%s", operatorSymbol(e->as.unary.op.type));
         emitExpression(e->as.unary.operand);
         printf(")");
+        break;
+    case NODE_CALL:
+        emitExpression(e->as.call.callee);
+        printf("(");
+        for (int i = 0; i < e->as.call.args.count; i++) {
+            if (i > 0) printf(", ");
+            emitExpression(e->as.call.args.items[i]);
+        }
+        printf(")");
+        break;
+    case NODE_MEMBER_ACCESS:
+        emitExpression(e->as.memberAccess.target);
+        printf(".");
+        emitToken(e->as.memberAccess.member);
         break;
     default:
         printf("?");
@@ -505,7 +521,21 @@ static void printNode(const Node* n, int depth) {
         printf("\n");
         break;
 
-    /* The three expression kinds are normally embedded inside another
+    case NODE_RETURN:
+        printf("return");
+        if (n->as.ret.name.length > 0) {
+            printf(" '%.*s'", n->as.ret.name.length, n->as.ret.name.start);
+        }
+        emitNameList(" : ",  &n->as.ret.types);
+        emitNameList(" :> ", &n->as.ret.specializes);
+        if (n->as.ret.defaultValue) {
+            printf(" = ");
+            emitExpression(n->as.ret.defaultValue);
+        }
+        printf("\n");
+        break;
+
+    /* The expression kinds are normally embedded inside another
      * node (an attribute's default value, eventually a multiplicity
      * bound, etc.) and rendered there via emitExpression.  These cases
      * keep the switch exhaustive — they only fire when astPrint is
@@ -513,6 +543,8 @@ static void printNode(const Node* n, int depth) {
     case NODE_LITERAL:
     case NODE_BINARY:
     case NODE_UNARY:
+    case NODE_CALL:
+    case NODE_MEMBER_ACCESS:
         emitExpression(n);
         printf("\n");
         break;

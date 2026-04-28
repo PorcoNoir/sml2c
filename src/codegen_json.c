@@ -103,6 +103,7 @@ static const char* defKindStr(DefKind k) {
     case DEF_SUBJECT:    return "Subject";
     case DEF_ACTION:     return "ActionDef";
     case DEF_STATE:      return "StateDef";
+    case DEF_CALC:       return "CalcDef";
     }
     return "?";
 }
@@ -526,6 +527,43 @@ static void emitLifecycleAction(J* j, const Node* n) {
     j->indent--; newline(j); fputc('}', j->out);
 }
 
+static void emitReturn(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Return");
+    sep(j, &first); emitKey(j, "name");
+    if (n->as.ret.name.length > 0) emitToken(j, n->as.ret.name);
+    else                            fputs("null", j->out);
+    sep(j, &first); emitKey(j, "types");        emitNodeList(j, &n->as.ret.types);
+    sep(j, &first); emitKey(j, "specializes");  emitNodeList(j, &n->as.ret.specializes);
+    sep(j, &first); emitKey(j, "default");
+    if (n->as.ret.defaultValue) emitNode(j, n->as.ret.defaultValue);
+    else                        fputs("null", j->out);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
+static void emitCall(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "Call");
+    sep(j, &first); emitKey(j, "callee");
+    if (n->as.call.callee) emitNode(j, n->as.call.callee);
+    else                   fputs("null", j->out);
+    sep(j, &first); emitKey(j, "args"); emitNodeList(j, &n->as.call.args);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
+static void emitMemberAccess(J* j, const Node* n) {
+    bool first = true;
+    fputc('{', j->out); j->indent++; newline(j);
+    sep(j, &first); emitFieldStr(j, "kind", "MemberAccess");
+    sep(j, &first); emitKey(j, "target");
+    if (n->as.memberAccess.target) emitNode(j, n->as.memberAccess.target);
+    else                           fputs("null", j->out);
+    sep(j, &first); emitKey(j, "member"); emitToken(j, n->as.memberAccess.member);
+    j->indent--; newline(j); fputc('}', j->out);
+}
+
 /* Dispatcher. */
 static void emitNode(J* j, const Node* n) {
     if (!n) { fputs("null", j->out); return; }
@@ -548,6 +586,9 @@ static void emitNode(J* j, const Node* n) {
     case NODE_SUCCESSION:     emitSuccession   (j, n); break;
     case NODE_TRANSITION:     emitTransition   (j, n); break;
     case NODE_LIFECYCLE_ACTION: emitLifecycleAction(j, n); break;
+    case NODE_RETURN:         emitReturn       (j, n); break;
+    case NODE_CALL:           emitCall         (j, n); break;
+    case NODE_MEMBER_ACCESS:  emitMemberAccess (j, n); break;
     }
 }
 

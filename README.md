@@ -251,27 +251,21 @@ sml2c --emit-json file.sysml | python tools/render_drawio.py - out.drawio
 
 ## Status
 
-v0.5.  Adds the next layer of common SysML constructs needed for
-real files: `perform action X;` action ownership, `subsets` (the
-usage-side analogue of `:>`), single-quoted lexical names like
-`'off-on'`, `**` token (recursive imports `import X::**` plus the
-power operator), units suffix `[kg]` `[m/s**2]` (lexed and consumed,
-semantics deferred), `@metadata{…}` and `#metadata` annotations
-(parse-and-skip), bare-form definitions (`part def Cylinder;`),
-anonymous redefining attributes (`attribute :>> fuelMass;`,
-`attribute redefines mass = 75;`), and bare requirement usages
-(constraint usages still require an `assert`/`assume`/`require`
-prefix).  A `return` statement form is parsed-and-skipped pending
-full `calc def` support in v0.6.
+v0.6.  Adds calc def (`calc def F { in p : T; return r : T = expr; }`),
+function-call expressions (`Compute(mass, factor)`), and member-access
+expressions (`engine.mass`, `vehicle.engine.cost`).  Together these
+complete the core *expression* grammar — every initializer expression
+in real SysML is now parseable, and the AST distinguishes namespace
+lookup (`A::B`) from runtime member access (`a.b`).  The
+referentialchecker no longer pollutes round-trip emit (v0.5 fix);
+calls and member access live in expression position only.
 
-The big architectural lesson of v0.5: **inference passes that mutate
-AST flags compromise round-trip fidelity.**  The
-referentialchecker pass forces `isReference=true` on attributes and
-top-level usages; without separation, the SysML emitter would echo
-`ref` even when the user never wrote it.  We split this into
-`isReference` (post-inference) and `isReferenceExplicit`
-(source-given) — the emitter reads the latter.  The `test/InferenceFlags.sysml`
-test is a regression guard for this class of bug.
+The big design pivot of v0.6: `.` is now strictly the member-access
+operator in expression contexts, distinct from `::` which remains the
+qualified-name separator.  Pre-v0.6, `engine.mass` parsed as the
+single qualified name `engine::mass`; post-v0.6 it produces a
+NODE_MEMBER_ACCESS that the typechecker (v0.10) can resolve through
+the engine's type to find `mass`.
 
 ## License & origin
 

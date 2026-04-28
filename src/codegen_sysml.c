@@ -222,6 +222,20 @@ static void emitExpression(S* s, const Node* expr) {
         fprintf(s->out, "%s", opSymbol(expr->as.unary.op.type));
         emitExpression(s, expr->as.unary.operand);
         break;
+    case NODE_CALL:
+        emitExpression(s, expr->as.call.callee);
+        fputc('(', s->out);
+        for (int i = 0; i < expr->as.call.args.count; i++) {
+            if (i > 0) fputs(", ", s->out);
+            emitExpression(s, expr->as.call.args.items[i]);
+        }
+        fputc(')', s->out);
+        break;
+    case NODE_MEMBER_ACCESS:
+        emitExpression(s, expr->as.memberAccess.target);
+        fputc('.', s->out);
+        emitToken(s, expr->as.memberAccess.member);
+        break;
     default:
         /* Other node kinds shouldn't appear inside expressions. */
         break;
@@ -249,6 +263,7 @@ static const char* defKeyword(DefKind k) {
     case DEF_SUBJECT:    return "subject";
     case DEF_ACTION:     return "action";
     case DEF_STATE:      return "state";
+    case DEF_CALC:       return "calc";
     }
     return "?";
 }
@@ -630,6 +645,28 @@ static void emitProgram(S* s, const Node* n) {
     }
 }
 
+/* Statement-level `return` emitter.  The forms we accept on parse:
+ *   return name : T = expr;
+ *   return :> S = expr;
+ *   return name :> S;
+ *   return : T;
+ * are all rendered with whatever fields are present.                */
+static void emitReturn(S* s, const Node* n) {
+    emitIndent(s);
+    fputs("return", s->out);
+    if (n->as.ret.name.length > 0) {
+        fputc(' ', s->out);
+        emitToken(s, n->as.ret.name);
+    }
+    emitNameList(s, " : ",  &n->as.ret.types);
+    emitNameList(s, " :> ", &n->as.ret.specializes);
+    if (n->as.ret.defaultValue) {
+        fputs(" = ", s->out);
+        emitExpression(s, n->as.ret.defaultValue);
+    }
+    fputs(";\n", s->out);
+}
+
 /* Dispatcher. */
 static void emitNode(S* s, const Node* n, bool insideEnumDef) {
     if (!n) return;
@@ -656,6 +693,7 @@ static void emitNode(S* s, const Node* n, bool insideEnumDef) {
     case NODE_SUCCESSION:     emitSuccession(s, n); break;
     case NODE_TRANSITION:     emitTransition(s, n); break;
     case NODE_LIFECYCLE_ACTION: emitLifecycleAction(s, n); break;
+    case NODE_RETURN:         emitReturn    (s, n); break;
 
     /* These shouldn't appear at statement positions; they are
      * embedded inside other emitters via emitExpression /
@@ -665,6 +703,8 @@ static void emitNode(S* s, const Node* n, bool insideEnumDef) {
     case NODE_LITERAL:
     case NODE_BINARY:
     case NODE_UNARY:
+    case NODE_CALL:
+    case NODE_MEMBER_ACCESS:
         break;
     }
 }

@@ -114,16 +114,18 @@ static Node* boolLiteral(void) {
 
 /* Identifier expression: build a qualified name starting from the
  * already-consumed leading identifier in parser.previous, then keep
- * pulling segments off `::` or `.` separators.  This is the same
- * shape as the standalone qualifiedName() function but adapted for
- * the "leading identifier already eaten" calling convention.       */
+ * pulling `::`-separated segments.  Unlike the declaration-context
+ * qualifiedName(), we do NOT consume `.` here — in expression
+ * contexts `.` is the member-access infix operator and goes through
+ * dotAccess so the AST distinguishes namespace lookup (`A::B`) from
+ * runtime member access (`a.b`).                                    */
 static Node* identifierExpr(void) {
     Node* q = astMakeNode(NODE_QUALIFIED_NAME, parser.previous.line);
     astAppendQualifiedPart(q, parser.previous);
-    while (check(TOKEN_COLON_COLON) || check(TOKEN_DOT)) {
-        advance();                              /* eat :: or .       */
+    while (check(TOKEN_COLON_COLON)) {
+        advance();                              /* eat ::            */
         if (!check(TOKEN_IDENTIFIER)) {
-            error("Expected name after '::' or '.'.");
+            error("Expected name after '::'.");
             break;
         }
         advance();
@@ -167,6 +169,34 @@ static Node* binaryExpr(Node* left) {
     return n;
 }
 
+/* `f(arg, arg, …)` — function-call expression.  Caller has consumed
+ * the opening '(' (the infix dispatch already advanced past it).     */
+static Node* callExpr(Node* callee) {
+    int line = parser.previous.line;
+    Node* n = astMakeNode(NODE_CALL, line);
+    n->as.call.callee = callee;
+    if (!check(TOKEN_RIGHT_PAREN)) {
+        do {
+            astListAppend(&n->as.call.args, expression());
+        } while (match(TOKEN_COMMA));
+    }
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after argument list.");
+    return n;
+}
+
+/* `target.member` — member access.  The right-hand side must be an
+ * identifier; we don't recurse via parsePrecedence because we want
+ * to consume just one segment and let further `.` chains build up
+ * left-associatively as the Pratt loop revisits the operator.       */
+static Node* dotAccess(Node* target) {
+    int line = parser.previous.line;
+    consume(TOKEN_IDENTIFIER, "Expected member name after '.'.");
+    Node* n = astMakeNode(NODE_MEMBER_ACCESS, line);
+    n->as.memberAccess.target = target;
+    n->as.memberAccess.member = parser.previous;
+    return n;
+}
+
 /* --------- the rules table ----------------------------------------- *
  *
  * One row per token type.  Designated initializers keep the table
@@ -176,7 +206,8 @@ static Node* binaryExpr(Node* left) {
  * "this token can't appear here" automatically.                       */
 
 static const ParseRule rules[TOKEN_EOF + 1] = {
-    [TOKEN_LEFT_PAREN]      = { grouping,       NULL,        PREC_NONE       },
+    [TOKEN_LEFT_PAREN]      = { grouping,       callExpr,    PREC_CALL       },
+    [TOKEN_DOT]             = { NULL,           dotAccess,   PREC_CALL       },
     [TOKEN_PLUS]            = { NULL,           binaryExpr,  PREC_TERM       },
     [TOKEN_MINUS]           = { unaryExpr,      binaryExpr,  PREC_TERM       },
     [TOKEN_STAR]            = { NULL,           binaryExpr,  PREC_FACTOR     },

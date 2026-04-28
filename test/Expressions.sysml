@@ -1,7 +1,14 @@
 package ExprDemo {
     private import ScalarValues::*;
 
+    part def Inner {
+        attribute torque : Real;
+    }
+
     part def Engine {
+        // an inner part we can dot-access
+        part engine : Inner;
+
         // simple integer literal
         attribute redline : Integer = 7000;
 

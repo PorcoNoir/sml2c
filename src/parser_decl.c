@@ -159,6 +159,7 @@ static const KindInfo kConstraint = { DEF_CONSTRAINT, false, true,  true,  "cons
 static const KindInfo kRequirement= { DEF_REQUIREMENT,false, true,  false, "requirement"};
 static const KindInfo kAction     = { DEF_ACTION,     false, true,  false, "action"     };
 static const KindInfo kState      = { DEF_STATE,      false, true,  false, "state"      };
+static const KindInfo kCalc       = { DEF_CALC,       false, true,  false, "calc"       };
 /* `subject e : Engine;` doesn't use the definitionOrUsage() dispatcher;
  * subjectStatement() handles it directly, so there's no KindInfo for
  * it.  The DEF_SUBJECT enum value is still useful as a tag on the
@@ -1123,22 +1124,59 @@ Node* declaration(void) {
         result = u;
     }
     else if (match(TOKEN_RETURN)) {
-        /* Parse-and-skip for now: calc def bodies aren't fully modeled
-         * (v0.6).  We swallow the statement so surrounding declarations
-         * still parse — eat tokens until the next top-level ';' or '}'.
-         * Tracks brace depth so a `return f = expr {…};` body doesn't
-         * accidentally terminate at the inner '}'.                      */
+        /* `return [IDENTIFIER] (`:` qname (`:>` qnameList)? )? (`=` expression)? `;`
+         *
+         *  Forms found in the wild:
+         *      return f_a : Real = bsfc * sgg * pwr;
+         *      return :> distancePerVolume = 1/f;
+         *      return distance :> length;
+         *      return part selectedVehicle :> vehicle_b;
+         *      return : Real;
+         *
+         *  We accept all of these and produce a NODE_RETURN with whatever
+         *  fields are present.  Callers (resolver/typechecker) ignore
+         *  unknown holes for now; meaningful checks come once we have a
+         *  typed AST.                                                   */
         if (dir != DIR_NONE) error("Direction modifier is not valid on return.");
         if (hasAnyModifier(mods)) error("Feature modifiers are not valid on return.");
-        int depth = 0;
-        while (!check(TOKEN_EOF)) {
-            if (check(TOKEN_SEMICOLON) && depth == 0) { advance(); break; }
-            if (check(TOKEN_RIGHT_BRACE) && depth == 0) break;
-            if      (match(TOKEN_LEFT_BRACE))  depth++;
-            else if (match(TOKEN_RIGHT_BRACE)) depth--;
-            else advance();
+
+        int line = parser.previous.line;
+        Node* r = astMakeNode(NODE_RETURN, line);
+        /* Leading `attribute` / `part` keyword is sometimes used to tell
+         * SysML which feature kind the return introduces.  We parse the
+         * keyword (if any) but don't yet propagate it — return-with-kind
+         * is rare and we don't have a slot for it.                      */
+        if (check(TOKEN_ATTRIBUTE) || check(TOKEN_PART)
+         || check(TOKEN_ITEM)      || check(TOKEN_PORT)
+         || check(TOKEN_REF)) {
+            advance();      /* swallow the optional kind keyword */
         }
-        result = NULL;          /* nothing material in the AST yet */
+        if (check(TOKEN_IDENTIFIER)) {
+            advance();
+            r->as.ret.name = parser.previous;
+        }
+        if (match(TOKEN_COLON)) {
+            appendQualifiedNameList(&r->as.ret.types);
+        }
+        if (match(TOKEN_COLON_GREATER) || match(TOKEN_SPECIALIZES)) {
+            appendQualifiedNameList(&r->as.ret.specializes);
+        }
+        /* The grammar also allows `:>>` here in calc def contexts; tolerate.  */
+        if (match(TOKEN_COLON_GREATER_GREATER) || match(TOKEN_REDEFINES)) {
+            /* No dedicated slot yet; reuse specializes as a safe approximation
+             * — both denote that the return feature inherits from the named one. */
+            appendQualifiedNameList(&r->as.ret.specializes);
+        }
+        if (match(TOKEN_EQUAL)) {
+            r->as.ret.defaultValue = expression();
+        }
+        consume(TOKEN_SEMICOLON, "Expected ';' after return.");
+        result = r;
+    }
+    else if (match(TOKEN_CALC)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on calc.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on calc.");
+        result = definitionOrUsage(&kCalc, dir, mods);
     }
     else if (match(TOKEN_SUCCESSION)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on succession.");

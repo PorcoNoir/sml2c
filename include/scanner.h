@@ -128,6 +128,10 @@ typedef enum {
      * the parser swallows the statement.                              */
     TOKEN_RETURN,
 
+    /* Calc def — a calculation body that returns a typed value.
+     * `calc def F { in p : T; return r : T = expr; }`.                */
+    TOKEN_CALC,
+
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,
     TOKEN_EOF

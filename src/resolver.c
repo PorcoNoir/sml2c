@@ -194,9 +194,27 @@ static void resolveExpression(Node* expr, Scope* current) {
     case NODE_UNARY:
         resolveExpression(expr->as.unary.operand, current);
         break;
+    case NODE_CALL:
+        /* Resolve the callee expression (typically a qualified name
+         * pointing at a calc def) and each argument expression.  We
+         * don't yet check arity or argument types — that needs the
+         * typed AST coming in v0.10+.                                */
+        resolveExpression(expr->as.call.callee, current);
+        for (int i = 0; i < expr->as.call.args.count; i++) {
+            resolveExpression(expr->as.call.args.items[i], current);
+        }
+        break;
+    case NODE_MEMBER_ACCESS:
+        /* Resolve the target expression; the `member` token can't be
+         * resolved without knowing the target's type, so we leave it
+         * for the typechecker.  This means `vehicle.engine.mass` does
+         * NOT currently produce an "undefined" error if `mass` is
+         * misspelled — that's a known v0.10 gap.                     */
+        resolveExpression(expr->as.memberAccess.target, current);
+        break;
     default:
         /* Other node kinds shouldn't appear in expression position;
-         * the parser produces only the four above.                 */
+         * the parser produces only the kinds above.                  */
         break;
     }
 }
@@ -342,6 +360,12 @@ static void resolveNode(Node* n, Scope* current) {
         }
         break;
 
+    case NODE_RETURN:
+        resolveNodeList(&n->as.ret.types,       current);
+        resolveNodeList(&n->as.ret.specializes, current);
+        resolveExpression(n->as.ret.defaultValue, current);
+        break;
+
     /* Leaves — no inner refs to resolve. */
     case NODE_DOC:
     case NODE_QUALIFIED_NAME:
@@ -349,6 +373,8 @@ static void resolveNode(Node* n, Scope* current) {
     case NODE_LITERAL:
     case NODE_BINARY:
     case NODE_UNARY:
+    case NODE_CALL:
+    case NODE_MEMBER_ACCESS:
         break;
     }
 }

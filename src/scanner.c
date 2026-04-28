@@ -212,6 +212,7 @@ static TokenType identifierType(void) {
     KW("if",          TOKEN_IF);
     KW("perform",     TOKEN_PERFORM);
     KW("return",      TOKEN_RETURN);
+    KW("calc",        TOKEN_CALC);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -494,6 +495,7 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_IF:             return "IF";
     case TOKEN_PERFORM:        return "PERFORM";
     case TOKEN_RETURN:         return "RETURN";
+    case TOKEN_CALC:           return "CALC";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }
