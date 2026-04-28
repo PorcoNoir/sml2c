@@ -68,6 +68,15 @@ static void emitDirection(S* s, Direction d) {
     }
 }
 
+static void emitAssertKind(S* s, AssertKind a) {
+    switch (a) {
+    case ASSERT_ASSERT:  fputs("assert ",  s->out); break;
+    case ASSERT_ASSUME:  fputs("assume ",  s->out); break;
+    case ASSERT_REQUIRE: fputs("require ", s->out); break;
+    case ASSERT_NONE:    break;
+    }
+}
+
 /* Emit the four feature modifiers in their canonical order. */
 static void emitModifiers(S* s, bool d, bool a, bool c, bool r) {
     if (d) fputs("derived ",  s->out);
@@ -147,6 +156,8 @@ static const char* opSymbol(TokenType t) {
     case TOKEN_LESS_EQUAL:     return "<=";
     case TOKEN_GREATER:        return ">";
     case TOKEN_GREATER_EQUAL:  return ">=";
+    case TOKEN_AND:            return "and";
+    case TOKEN_OR:             return "or";
     default:                   return "?";
     }
 }
@@ -196,6 +207,9 @@ static const char* defKeyword(DefKind k) {
     case DEF_ENUM:       return "enum";
     case DEF_DATATYPE:   return "datatype";    /* no source form, sentinel */
     case DEF_REFERENCE:  return "ref";          /* bare-ref usage */
+    case DEF_CONSTRAINT: return "constraint";
+    case DEF_REQUIREMENT:return "requirement";
+    case DEF_SUBJECT:    return "subject";
     }
     return "?";
 }
@@ -209,7 +223,10 @@ static void emitDefinition(S* s, const Node* n) {
     emitNameList(s, " :> ",  &n->as.scope.specializes);
     emitNameList(s, " :>> ", &n->as.scope.redefines);
 
-    if (n->as.scope.memberCount == 0) {
+    /* A constraint def body may have only a trailing expression with no
+     * other members, but it always needs the body printed inside braces. */
+    bool hasBody = (n->as.scope.body != NULL);
+    if (n->as.scope.memberCount == 0 && !hasBody) {
         fputs(" { }\n", s->out);
         return;
     }
@@ -218,6 +235,11 @@ static void emitDefinition(S* s, const Node* n) {
     bool childIsEnum = (n->as.scope.defKind == DEF_ENUM);
     for (int i = 0; i < n->as.scope.memberCount; i++) {
         emitNode(s, n->as.scope.members[i], childIsEnum);
+    }
+    if (hasBody) {
+        emitIndent(s);
+        emitExpression(s, n->as.scope.body);
+        fputc('\n', s->out);
     }
     s->depth--;
     emitIndent(s);
@@ -254,6 +276,7 @@ static void emitEnumValue(S* s, const Node* n) {
 static void emitUsage(S* s, const Node* n) {
     emitIndent(s);
     emitVisibility(s, n->as.usage.visibility);
+    emitAssertKind(s, n->as.usage.assertKind);
     emitDirection (s, n->as.usage.direction);
     emitModifiers (s, n->as.usage.isDerived,
                        n->as.usage.isAbstract,
@@ -281,6 +304,15 @@ static void emitUsage(S* s, const Node* n) {
     if (n->as.usage.defaultValue) {
         fputs(" = ", s->out);
         emitExpression(s, n->as.usage.defaultValue);
+    }
+
+    /* Inline constraint body: `assert constraint { x > 0 }`.  Replaces
+     * the `;` terminator with a brace-delimited expression form.       */
+    if (n->as.usage.body) {
+        fputs(" { ", s->out);
+        emitExpression(s, n->as.usage.body);
+        fputs(" }\n", s->out);
+        return;
     }
 
     if (n->as.usage.memberCount == 0) {

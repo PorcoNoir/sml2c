@@ -130,6 +130,12 @@ static const KindInfo kConnection = { DEF_CONNECTION, false, true,  true,  "conn
 static const KindInfo kFlow       = { DEF_FLOW,       false, true,  true,  "flow"       };
 static const KindInfo kEnd        = { DEF_END,        false, false, false, "end"        };
 static const KindInfo kEnum       = { DEF_ENUM,       false, true,  false, "enum"       };
+static const KindInfo kConstraint = { DEF_CONSTRAINT, false, true,  true,  "constraint" };
+static const KindInfo kRequirement= { DEF_REQUIREMENT,false, true,  false, "requirement"};
+/* `subject e : Engine;` doesn't use the definitionOrUsage() dispatcher;
+ * subjectStatement() handles it directly, so there's no KindInfo for
+ * it.  The DEF_SUBJECT enum value is still useful as a tag on the
+ * resulting USAGE node.                                             */
 /* ReferenceUsage has no `def` form (defAllowed=false): it's a Usage
  * only.  No keyword to consume — caller invokes usage() directly,
  * not definitionOrUsage().                                          */
@@ -199,6 +205,34 @@ static Node* definition(const KindInfo* k) {
             v->as.attribute.defaultValue = initializer;
             astListAppend(&v->as.attribute.types, typeRef);
             astAppendScopeMember(def, v);
+        }
+    } else if (k->kind == DEF_CONSTRAINT) {
+        /* Constraint def body: `(in|out)? feature*` followed by a
+         * single trailing boolean expression.  Parameters are usages
+         * (typically with a direction), terminated by ';'.  The body
+         * expression has no trailing ';' — it runs to the closing '}'. */
+        while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+            /* Heuristic: if the current token starts a declaration
+             * (direction, visibility, modifier, kind keyword,
+             * `attribute`, `doc`, `comment`), parse one.  Anything
+             * else is the start of the body expression.              */
+            if (check(TOKEN_IN) || check(TOKEN_OUT) || check(TOKEN_INOUT)
+             || check(TOKEN_PUBLIC) || check(TOKEN_PRIVATE) || check(TOKEN_PROTECTED)
+             || check(TOKEN_DERIVED) || check(TOKEN_ABSTRACT)
+             || check(TOKEN_CONSTANT) || check(TOKEN_REF)
+             || check(TOKEN_ATTRIBUTE) || check(TOKEN_DOC) || check(TOKEN_DOC_BODY)
+             || check(TOKEN_COMMENT_KW)) {
+                Node* m = declaration();
+                if (m) astAppendScopeMember(def, m);
+                if (parser.panicMode) synchronize();
+                continue;
+            }
+            /* Otherwise, parse the body expression (single per def). */
+            if (def->as.scope.body) {
+                error("A constraint def may have only one body expression.");
+            }
+            def->as.scope.body = expression();
+            /* Loop again — only the closing '}' or EOF should follow. */
         }
     } else {
         while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
@@ -338,6 +372,16 @@ static Node* definitionOrUsage(const KindInfo* k, Direction dir, FeatureModifier
     if (dir != DIR_NONE && !k->allowsDirection) {
         error("Direction modifier is not valid on this kind of usage.");
     }
+    /* Constraint and requirement usages require an explicit assertion
+     * prefix (assert/assume/require) per the v0.x design decision —
+     * bare `constraint c : C;` is reserved for a future extension.   */
+    if (k->kind == DEF_CONSTRAINT) {
+        error("Constraint usage requires an 'assert', 'assume', or "
+              "'require' prefix.");
+    }
+    if (k->kind == DEF_REQUIREMENT) {
+        error("Requirement usage requires a 'require' prefix.");
+    }
     Node* u = usage(k, dir);
     if (u && u->kind == NODE_USAGE) {
         u->as.usage.isDerived   = m.isDerived;
@@ -356,6 +400,87 @@ static Node* connectStatement(void) {
     u->as.usage.defKind = DEF_CONNECTION;
     parseEndsClause(&u->as.usage.ends, "connector");
     consume(TOKEN_SEMICOLON, "Expected ';' after connect statement.");
+    return u;
+}
+
+/*  assertion ::= ("assert" | "assume" | "require")
+ *                  ( "constraint" | "requirement" )
+ *                  ( IDENTIFIER (": " qualifiedName)? ";"
+ *                    | "{" expression "}"           // anon inline
+ *                    | ":" qualifiedName ";" )      // unnamed typed
+ *
+ *  The caller has already consumed the assertion keyword and stored it
+ *  in `kw`.  This helper picks up from `constraint`/`requirement` and
+ *  builds the usage.                                                   */
+static Node* assertedConstraintOrRequirement(AssertKind kw, int kwLine) {
+    /* Choose which kind of usage we're parsing. */
+    bool isReq = false;
+    if (match(TOKEN_REQUIREMENT))      isReq = true;
+    else if (match(TOKEN_CONSTRAINT))  isReq = false;
+    else {
+        errorAtCurrent("Expected 'constraint' or 'requirement' after "
+                       "assertion keyword.");
+        advance();
+        return NULL;
+    }
+    /* `assume` only makes sense on a constraint.  `require` is fine on
+     * either (require constraint, require requirement).                 */
+    if (kw == ASSERT_ASSUME && isReq) {
+        error("'assume' is only valid before 'constraint'.");
+    }
+
+    Node* u = astMakeNode(NODE_USAGE, kwLine);
+    u->as.usage.defKind    = isReq ? DEF_REQUIREMENT : DEF_CONSTRAINT;
+    u->as.usage.assertKind = kw;
+
+    /* Anonymous inline form: `assert constraint { expression }`. */
+    if (match(TOKEN_LEFT_BRACE)) {
+        if (isReq) {
+            error("Inline body form is only valid for constraints.");
+        }
+        u->as.usage.body = expression();
+        consume(TOKEN_RIGHT_BRACE, "Expected '}' to close inline constraint body.");
+        return u;
+    }
+
+    /* Named or typed form.  Optional name, then optional `: TypeRef`. */
+    if (check(TOKEN_IDENTIFIER)) {
+        advance();
+        u->as.usage.name = parser.previous;
+    }
+    if (match(TOKEN_COLON)) {
+        appendQualifiedNameList(&u->as.usage.types);
+    }
+    /* Optional inline override body after `: T`: rare, but allowed. */
+    if (match(TOKEN_LEFT_BRACE)) {
+        if (isReq) {
+            error("Inline body is not valid on a requirement usage.");
+        }
+        u->as.usage.body = expression();
+        consume(TOKEN_RIGHT_BRACE, "Expected '}' to close inline constraint body.");
+        return u;
+    }
+
+    consume(TOKEN_SEMICOLON, "Expected ';' after asserted constraint/requirement.");
+    return u;
+}
+
+/*  subject ::= "subject" IDENTIFIER (":" qualifiedName)? ";"
+ *
+ *  Caller has consumed TOKEN_SUBJECT.  Models the subject as a USAGE
+ *  with DEF_SUBJECT kind so it round-trips and validates uniformly
+ *  with other named features.                                         */
+static Node* subjectStatement(void) {
+    int line = parser.previous.line;
+    consume(TOKEN_IDENTIFIER, "Expected subject name.");
+    Token name = parser.previous;
+    Node* u = astMakeNode(NODE_USAGE, line);
+    u->as.usage.defKind = DEF_SUBJECT;
+    u->as.usage.name    = name;
+    if (match(TOKEN_COLON)) {
+        appendQualifiedNameList(&u->as.usage.types);
+    }
+    consume(TOKEN_SEMICOLON, "Expected ';' after subject.");
     return u;
 }
 
@@ -565,6 +690,24 @@ Node* declaration(void) {
     else if (match(TOKEN_FLOW))         result = definitionOrUsage(&kFlow,       dir, mods);
     else if (match(TOKEN_END))          result = definitionOrUsage(&kEnd,        dir, mods);
     else if (match(TOKEN_ENUM))         result = definitionOrUsage(&kEnum,       dir, mods);
+    else if (match(TOKEN_CONSTRAINT))   result = definitionOrUsage(&kConstraint, dir, mods);
+    else if (match(TOKEN_REQUIREMENT))  result = definitionOrUsage(&kRequirement,dir, mods);
+    else if (check(TOKEN_ASSERT) || check(TOKEN_ASSUME) || check(TOKEN_REQUIRE)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid before an assertion.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid before an assertion.");
+        AssertKind kw;
+        if      (check(TOKEN_ASSERT))  kw = ASSERT_ASSERT;
+        else if (check(TOKEN_ASSUME))  kw = ASSERT_ASSUME;
+        else                           kw = ASSERT_REQUIRE;
+        int kwLine = parser.current.line;
+        advance();                      /* consume the assertion keyword */
+        result = assertedConstraintOrRequirement(kw, kwLine);
+    }
+    else if (match(TOKEN_SUBJECT)) {
+        if (dir != DIR_NONE) error("Direction modifier is not valid on subject.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on subject.");
+        result = subjectStatement();
+    }
     else if (match(TOKEN_CONNECT)) {
         if (dir != DIR_NONE) error("Direction modifier is not valid on connect.");
         if (hasAnyModifier(mods)) error("Feature modifiers are not valid on connect.");
@@ -581,17 +724,25 @@ Node* declaration(void) {
             result->as.attribute.isReference = mods.isReference;
         }
     } else {
-        /* Bare-ref form (§8.3.6.3 ReferenceUsage): `ref name : T = expr;`
-         * with no kind keyword.  We get here when parseFeatureModifiers
-         * consumed `ref`, none of the kind keywords matched, and the
-         * next token is the usage's name.                              */
-        if (mods.isReference && check(TOKEN_IDENTIFIER)) {
+        /* Bare-form usage (§8.3.6.3 ReferenceUsage): no kind keyword,
+         * just an optional ref/direction prefix and a name.
+         *
+         * Two flavours both reach here:
+         *   - `ref name : T = expr;`         — explicit ReferenceUsage
+         *   - `in name : T;` / `out name : T;` — directional parameter
+         *     used in constraint, calc, action def bodies
+         *
+         * We accept both as ReferenceUsage and let the modifiers stamp
+         * onto the resulting node.                                    */
+        bool bareForm = check(TOKEN_IDENTIFIER)
+                     && (mods.isReference || dir != DIR_NONE);
+        if (bareForm) {
             Node* u = usage(&kReference, dir);
             if (u && u->kind == NODE_USAGE) {
                 u->as.usage.isDerived   = mods.isDerived;
                 u->as.usage.isAbstract  = mods.isAbstract;
                 u->as.usage.isConstant  = mods.isConstant;
-                u->as.usage.isReference = true;
+                u->as.usage.isReference = mods.isReference;
             }
             astSetVisibility(u, vis);
             return u;

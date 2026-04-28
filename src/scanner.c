@@ -187,6 +187,14 @@ static TokenType identifierType(void) {
     KW("end",         TOKEN_END);
     KW("true",        TOKEN_TRUE);
     KW("false",       TOKEN_FALSE);
+    KW("constraint",  TOKEN_CONSTRAINT);
+    KW("requirement", TOKEN_REQUIREMENT);
+    KW("assert",      TOKEN_ASSERT);
+    KW("assume",      TOKEN_ASSUME);
+    KW("require",     TOKEN_REQUIRE);
+    KW("subject",     TOKEN_SUBJECT);
+    KW("and",         TOKEN_AND);
+    KW("or",          TOKEN_OR);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -414,6 +422,14 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_END:            return "END";
     case TOKEN_TRUE:           return "TRUE";
     case TOKEN_FALSE:          return "FALSE";
+    case TOKEN_CONSTRAINT:     return "CONSTRAINT";
+    case TOKEN_REQUIREMENT:    return "REQUIREMENT";
+    case TOKEN_ASSERT:         return "ASSERT";
+    case TOKEN_ASSUME:         return "ASSUME";
+    case TOKEN_REQUIRE:        return "REQUIRE";
+    case TOKEN_SUBJECT:        return "SUBJECT";
+    case TOKEN_AND:            return "AND";
+    case TOKEN_OR:             return "OR";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }

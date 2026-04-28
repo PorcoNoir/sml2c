@@ -210,6 +210,24 @@ static const Node* binaryType(const Node* expr) {
         }
         return tBoolean;
 
+    case TOKEN_AND:
+    case TOKEN_OR:
+        /* Logical connectives: both operands must be boolean.  Unknowns
+         * propagate without complaint.                                  */
+        if (l && l != tBoolean && !specializes(l, tBoolean)) {
+            typeError(line, "Operator '%.*s' requires Boolean operands; "
+                            "left is '%s'.",
+                      expr->as.binary.op.length, expr->as.binary.op.start,
+                      typeName(l));
+        }
+        if (r && r != tBoolean && !specializes(r, tBoolean)) {
+            typeError(line, "Operator '%.*s' requires Boolean operands; "
+                            "right is '%s'.",
+                      expr->as.binary.op.length, expr->as.binary.op.start,
+                      typeName(r));
+        }
+        return tBoolean;
+
     default:
         return NULL;
     }
@@ -247,6 +265,60 @@ static const Node* typeOf(const Node* expr) {
     case NODE_BINARY:         return binaryType(expr);
     case NODE_UNARY:          return unaryType(expr);
     default:                  return NULL;
+    }
+}
+
+/* ---- constraint / requirement body checks ---------------------- */
+
+/* The body of a constraint def or an inline constraint usage must
+ * type as Boolean.  Unknown types are tolerated (resolution may have
+ * deferred a name).                                                  */
+static void checkConstraintBody(const Node* body, int line, const char* what) {
+    if (!body) return;
+    const Node* t = typeOf(body);
+    if (t && t != tBoolean && !specializes(t, tBoolean)) {
+        typeError(line,
+                  "%s body must be Boolean; got '%s'.",
+                  what, typeName(t));
+    }
+}
+
+/* Validate that a constraint usage's type ref points at a constraint
+ * def (and similarly for requirement usages).  Mismatches are real
+ * errors — `assert constraint c : SomePart` is meaningless.          */
+static void checkAssertionRef(const Node* usage) {
+    if (usage->as.usage.assertKind == ASSERT_NONE) return;
+    if (usage->as.usage.types.count == 0) return;          /* anonymous, ok */
+    const Node* tref = usage->as.usage.types.items[0];
+    if (!tref || tref->kind != NODE_QUALIFIED_NAME) return;
+    const Node* target = tref->as.qualifiedName.resolved;
+    if (!target) return;                                    /* unresolved */
+    if (target->kind != NODE_DEFINITION) {
+        typeError(usage->line,
+                  "Asserted reference must point at a constraint or "
+                  "requirement def; got '%s'.", typeName(target));
+        return;
+    }
+    DefKind want = usage->as.usage.defKind;
+    DefKind got  = target->as.scope.defKind;
+    if (want == DEF_CONSTRAINT && got != DEF_CONSTRAINT) {
+        typeError(usage->line,
+                  "'%s constraint' must reference a constraint def; "
+                  "'%.*s' is a %s.",
+                  usage->as.usage.assertKind == ASSERT_REQUIRE ? "require"
+                : usage->as.usage.assertKind == ASSERT_ASSUME  ? "assume"
+                : "assert",
+                  target->as.scope.name.length,
+                  target->as.scope.name.start,
+                  typeName(target));
+    }
+    if (want == DEF_REQUIREMENT && got != DEF_REQUIREMENT) {
+        typeError(usage->line,
+                  "'require requirement' must reference a requirement "
+                  "def; '%.*s' is a %s.",
+                  target->as.scope.name.length,
+                  target->as.scope.name.start,
+                  typeName(target));
     }
 }
 
@@ -331,12 +403,24 @@ static void walk(const Node* n, bool insideEnumDef) {
         for (int i = 0; i < n->as.scope.memberCount; i++) {
             walk(n->as.scope.members[i], childContext);
         }
+        /* Constraint def body must be Boolean. */
+        if (n->as.scope.defKind == DEF_CONSTRAINT) {
+            checkConstraintBody(n->as.scope.body, n->line,
+                                "Constraint def");
+        }
         break;
     }
     case NODE_USAGE:
         for (int i = 0; i < n->as.usage.memberCount; i++) {
             walk(n->as.usage.members[i], false);
         }
+        /* Inline body of an anonymous constraint usage must be Boolean. */
+        if (n->as.usage.defKind == DEF_CONSTRAINT && n->as.usage.body) {
+            checkConstraintBody(n->as.usage.body, n->line,
+                                "Inline constraint");
+        }
+        /* Validate type-ref target for assert/assume/require usages. */
+        checkAssertionRef(n);
         break;
     case NODE_ATTRIBUTE:
         checkAttribute(n, insideEnumDef);

@@ -239,6 +239,12 @@ static void resolveNode(Node* n, Scope* current) {
 
         Scope inner = { .parent = current, .what = "definition" };
         resolveScopeBody(&inner, n->as.scope.members, n->as.scope.memberCount);
+        /* Constraint def body expressions reference parameters declared
+         * as members; resolve the body inside the inner scope so those
+         * references bind correctly.                                   */
+        if (n->as.scope.body) {
+            resolveExpression(n->as.scope.body, &inner);
+        }
         freeScope(&inner);
         break;
     }
@@ -251,6 +257,10 @@ static void resolveNode(Node* n, Scope* current) {
         resolveMultiSegmentRedefs(&n->as.usage.redefines, current);
         resolveNodeList(&n->as.usage.ends,        current);
         resolveExpression(n->as.usage.defaultValue, current);
+        /* Inline constraint body: `assert constraint { x > 0 }`.
+         * Resolved against the outer scope, since these usages don't
+         * introduce parameters of their own.                           */
+        resolveExpression(n->as.usage.body, current);
 
         if (n->as.usage.memberCount > 0) {
             Scope inner = { .parent = current, .what = "usage" };

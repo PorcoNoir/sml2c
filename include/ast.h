@@ -61,8 +61,23 @@ typedef enum {
     DEF_END,                /* `end name : Type;` inside a connection/flow def */
     DEF_DATATYPE,           /* synthetic — only the built-in stdlib uses this */
     DEF_ENUM,               /* `enum def Color { red; green; ... }` and its values */
-    DEF_REFERENCE           /* bare `ref name : T;` — kindless ReferenceUsage */
+    DEF_REFERENCE,          /* bare `ref name : T;` — kindless ReferenceUsage */
+    DEF_CONSTRAINT,         /* `constraint def C { … }` / `assert constraint c : C` */
+    DEF_REQUIREMENT,        /* `requirement def R { … }` / `require requirement r : R` */
+    DEF_SUBJECT             /* `subject e : Engine;` inside a requirement def */
 } DefKind;
+
+/* The `assert` / `assume` / `require` modifier on a constraint or
+ * requirement usage.  Bare usages without one of these keywords are
+ * not (yet) accepted by the parser — every constraint/requirement
+ * usage in v0.x must declare its assertion stance.  None is reserved
+ * for non-constraint/requirement usages, where the field is unused. */
+typedef enum {
+    ASSERT_NONE = 0,
+    ASSERT_ASSERT,          /* `assert constraint c : C;`                  */
+    ASSERT_ASSUME,          /* `assume constraint c : C;` (in requirement) */
+    ASSERT_REQUIRE          /* `require constraint c : C;`                 */
+} AssertKind;
 
 /* Port direction modifier.  Currently only port usages can carry one,
  * but we put it on the usage variant uniformly so the parser doesn't
@@ -102,7 +117,13 @@ struct Node {
         /* PROGRAM, PACKAGE, DEFINITION — all "named scopes" with members.
          * defKind is meaningful only for DEFINITION; the other two leave
          * it at zero (DEF_PART), which is harmless because they're never
-         * dispatched through the kind-aware printer.                    */
+         * dispatched through the kind-aware printer.
+         *
+         * `body` carries the boolean expression of a `constraint def`.
+         * It's NULL for every other DEFINITION (and for PROGRAM /
+         * PACKAGE).  For constraint defs it sits alongside members:
+         * `in p : T;` parameters live in members; the trailing
+         * boolean expression lives here.                                */
         struct {
             Token      name;        /* unused for PROGRAM                */
             Visibility visibility;
@@ -113,11 +134,20 @@ struct Node {
             int        memberCapacity;
             NodeList   specializes; /* `:>`  / `specializes` (DEFINITION) */
             NodeList   redefines;   /* `:>>` / `redefines`   (DEFINITION) */
+            Node*      body;        /* constraint def: boolean expression */
         } scope;
 
         /* USAGE — has optional name (anonymous for bare `connect a to b`),
          * optional type/spec/redef lists, optional multiplicity, optional
-         * connector or flow endpoint clause, and an optional body.       */
+         * connector or flow endpoint clause, and an optional body.
+         *
+         * `assertKind` records the assert/assume/require prefix for
+         * constraint and requirement usages.  Other usages leave it
+         * at ASSERT_NONE.
+         *
+         * `body` carries an inline boolean expression for anonymous
+         * constraint usages: `assert constraint { x > 0 }`.  NULL when
+         * the usage is named or typed instead.                          */
         struct {
             Token      name;        /* length==0 means anonymous          */
             Visibility visibility;
@@ -127,12 +157,14 @@ struct Node {
             bool       isAbstract;  /* RefPrefix:  `abstract`             */
             bool       isConstant;  /* RefPrefix:  `constant`             */
             bool       isReference; /* BasicUsagePrefix: `ref`            */
+            AssertKind assertKind;  /* assert/assume/require              */
             NodeList   types;       /* `: A, B`                           */
             NodeList   specializes; /* `:> X, Y`                          */
             NodeList   redefines;   /* `:>> P, Q`                         */
             Node*      multiplicity;/* `[...]`  NULL if not specified     */
             Node*      defaultValue;/* `= expr`  NULL if not specified    */
             NodeList   ends;        /* connector/flow endpoints (2 elts)  */
+            Node*      body;        /* inline boolean expr (constraint)   */
             Node**     members;     /* NULL if no `{ ... }`               */
             int        memberCount;
             int        memberCapacity;

@@ -76,6 +76,20 @@ typedef enum {
     TOKEN_END,
     TOKEN_TRUE, TOKEN_FALSE,
 
+    /* Constraints, requirements (turn 1 of behavioral expansion). ---- */
+    TOKEN_CONSTRAINT,
+    TOKEN_REQUIREMENT,
+    TOKEN_ASSERT,
+    TOKEN_ASSUME,
+    TOKEN_REQUIRE,
+    TOKEN_SUBJECT,
+
+    /* Logical connectives — SysML uses the keyword forms `and` / `or`,
+     * not `&&` / `||`.  Slot into the existing Pratt rules table at
+     * PREC_AND / PREC_OR.                                              */
+    TOKEN_AND,
+    TOKEN_OR,
+
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,
     TOKEN_EOF

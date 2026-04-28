@@ -41,8 +41,8 @@
 typedef enum {
     PREC_NONE = 0,
     PREC_ASSIGNMENT,    /* = (we don't have assignment expressions yet) */
-    PREC_OR,            /* ||                                            */
-    PREC_AND,           /* &&                                            */
+    PREC_OR,            /* `or`  (SysML keyword form, not || )           */
+    PREC_AND,           /* `and` (SysML keyword form, not && )           */
     PREC_EQUALITY,      /* == !=                                         */
     PREC_COMPARISON,    /* < <= > >=                                     */
     PREC_TERM,          /* + -                                           */
@@ -192,6 +192,8 @@ static const ParseRule rules[TOKEN_EOF + 1] = {
     [TOKEN_STRING]          = { stringLiteral,  NULL,        PREC_NONE       },
     [TOKEN_TRUE]            = { boolLiteral,    NULL,        PREC_NONE       },
     [TOKEN_FALSE]           = { boolLiteral,    NULL,        PREC_NONE       },
+    [TOKEN_AND]             = { NULL,           binaryExpr,  PREC_AND        },
+    [TOKEN_OR]              = { NULL,           binaryExpr,  PREC_OR         },
     /* Everything else: implicit { NULL, NULL, PREC_NONE }.            */
 };
 

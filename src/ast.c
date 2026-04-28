@@ -123,6 +123,15 @@ static void emitDirection(Direction d) {
     }
 }
 
+static void emitAssertKind(AssertKind a) {
+    switch (a) {
+    case ASSERT_ASSERT:  printf("assert ");  break;
+    case ASSERT_ASSUME:  printf("assume ");  break;
+    case ASSERT_REQUIRE: printf("require "); break;
+    case ASSERT_NONE:    /* nothing */       break;
+    }
+}
+
 /* Emit feature-modifier flags in the canonical SysML v2 order:
  *   derived → abstract → constant → ref
  * Matches the RefPrefix/BasicUsagePrefix grammar so output reads in
@@ -145,14 +154,20 @@ static const char* kindLabel(DefKind k, bool isDefinition) {
         "?EndDef",  /* ends have no def form; sentinel for misuse  */
         "DataTypeDef",
         "EnumDef",
-        "?ReferenceDef" /* references have no def form              */
+        "?ReferenceDef", /* references have no def form              */
+        "ConstraintDef",
+        "RequirementDef",
+        "?SubjectDef"  /* subjects have no def form; sentinel        */
     };
     static const char* uses[] = {
         "Part", "Port", "Interface",
         "Item", "Connection", "Flow", "End",
         "DataType",  /* not produced by the parser, used by stdlib  */
         "EnumValue",
-        "Reference"
+        "Reference",
+        "Constraint",
+        "Requirement",
+        "Subject"
     };
     int idx = (int)k;
     if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
@@ -200,6 +215,8 @@ static const char* operatorSymbol(TokenType t) {
     case TOKEN_LESS_EQUAL:     return "<=";
     case TOKEN_GREATER:        return ">";
     case TOKEN_GREATER_EQUAL:  return ">=";
+    case TOKEN_AND:            return "and";
+    case TOKEN_OR:             return "or";
     default:                   return "?";
     }
 }
@@ -263,6 +280,10 @@ static void printNode(const Node* n, int depth) {
         printf("'");
         emitNameList(" :> ",  &n->as.scope.specializes);
         emitNameList(" :>> ", &n->as.scope.redefines);
+        if (n->as.scope.body) {
+            printf(" body=");
+            emitExpression(n->as.scope.body);
+        }
         printf("\n");
         for (int i = 0; i < n->as.scope.memberCount; i++)
             printNode(n->as.scope.members[i], depth + 1);
@@ -270,6 +291,7 @@ static void printNode(const Node* n, int depth) {
 
     case NODE_USAGE:
         emitVisibility(n->as.usage.visibility);
+        emitAssertKind(n->as.usage.assertKind);
         emitDirection(n->as.usage.direction);
         emitFeatureModifiers(n->as.usage.isDerived,  n->as.usage.isAbstract,
                              n->as.usage.isConstant, n->as.usage.isReference);
@@ -285,6 +307,11 @@ static void printNode(const Node* n, int depth) {
         if (n->as.usage.defaultValue) {
             printf(" = ");
             emitExpression(n->as.usage.defaultValue);
+        }
+        if (n->as.usage.body) {
+            printf(" {");
+            emitExpression(n->as.usage.body);
+            printf("}");
         }
         printf("\n");
         for (int i = 0; i < n->as.usage.memberCount; i++)

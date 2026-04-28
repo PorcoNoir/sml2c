@@ -98,6 +98,19 @@ static const char* defKindStr(DefKind k) {
     case DEF_DATATYPE:   return "DataTypeDef";
     case DEF_ENUM:       return "EnumDef";
     case DEF_REFERENCE:  return "ReferenceUsage";
+    case DEF_CONSTRAINT: return "ConstraintDef";
+    case DEF_REQUIREMENT:return "RequirementDef";
+    case DEF_SUBJECT:    return "Subject";
+    }
+    return "?";
+}
+
+static const char* assertKindStr(AssertKind a) {
+    switch (a) {
+    case ASSERT_NONE:    return "none";
+    case ASSERT_ASSERT:  return "assert";
+    case ASSERT_ASSUME:  return "assume";
+    case ASSERT_REQUIRE: return "require";
     }
     return "?";
 }
@@ -145,6 +158,8 @@ static const char* opSym(TokenType t) {
     case TOKEN_LESS_EQUAL:     return "<=";
     case TOKEN_GREATER:        return ">";
     case TOKEN_GREATER_EQUAL:  return ">=";
+    case TOKEN_AND:            return "and";
+    case TOKEN_OR:             return "or";
     default:                   return "?";
     }
 }
@@ -343,6 +358,9 @@ static void emitDefinition(J* j, const Node* n) {
     sep(j, &first); emitFieldBool(j, "isAbstract", n->as.scope.isAbstract);
     sep(j, &first); emitKey(j, "specializes"); emitNodeList(j, &n->as.scope.specializes);
     sep(j, &first); emitKey(j, "redefines");   emitNodeList(j, &n->as.scope.redefines);
+    sep(j, &first); emitKey(j, "body");
+    if (n->as.scope.body) emitNode(j, n->as.scope.body);
+    else                  fputs("null", j->out);
     sep(j, &first); emitKey(j, "members");
     emitNodeArray(j, n->as.scope.members, n->as.scope.memberCount);
     j->indent--; newline(j); fputc('}', j->out);
@@ -358,6 +376,7 @@ static void emitUsage(J* j, const Node* n) {
     else                             fputs("null", j->out);
     sep(j, &first); emitFieldStr (j, "visibility", visStr(n->as.usage.visibility));
     sep(j, &first); emitFieldStr (j, "direction",  dirStr(n->as.usage.direction));
+    sep(j, &first); emitFieldStr (j, "assertKind", assertKindStr(n->as.usage.assertKind));
     sep(j, &first); emitFieldBool(j, "isDerived",   n->as.usage.isDerived);
     sep(j, &first); emitFieldBool(j, "isAbstract",  n->as.usage.isAbstract);
     sep(j, &first); emitFieldBool(j, "isConstant",  n->as.usage.isConstant);
@@ -370,6 +389,9 @@ static void emitUsage(J* j, const Node* n) {
     sep(j, &first); emitKey(j, "default");
     if (n->as.usage.defaultValue) emitNode(j, n->as.usage.defaultValue);
     else                          fputs("null", j->out);
+    sep(j, &first); emitKey(j, "body");
+    if (n->as.usage.body) emitNode(j, n->as.usage.body);
+    else                  fputs("null", j->out);
     sep(j, &first); emitKey(j, "members");
     emitNodeArray(j, n->as.usage.members, n->as.usage.memberCount);
     j->indent--; newline(j); fputc('}', j->out);

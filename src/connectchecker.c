@@ -71,6 +71,9 @@ static const char* describeNode(const Node* n) {
         case DEF_DATATYPE:   return "datatype usage";
         case DEF_ENUM:       return "enum value";
         case DEF_REFERENCE:  return "reference usage";
+        case DEF_CONSTRAINT: return "constraint usage";
+        case DEF_REQUIREMENT:return "requirement usage";
+        case DEF_SUBJECT:    return "subject";
         }
         return "usage";
     case NODE_ATTRIBUTE:  return "attribute";

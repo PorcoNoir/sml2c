@@ -103,6 +103,12 @@ void synchronize(void) {
         case TOKEN_ALIAS:
         case TOKEN_DEPENDENCY:
         case TOKEN_ENUM:
+        case TOKEN_CONSTRAINT:
+        case TOKEN_REQUIREMENT:
+        case TOKEN_ASSERT:
+        case TOKEN_ASSUME:
+        case TOKEN_REQUIRE:
+        case TOKEN_SUBJECT:
         case TOKEN_ABSTRACT:    /* feature modifiers can begin a decl */
         case TOKEN_DERIVED:
         case TOKEN_CONSTANT:
