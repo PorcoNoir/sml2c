@@ -9,6 +9,275 @@ the working tree at the time of release.
 
 ---
 
+## v0.25 — `--emit-fmu-c` foundation: FMI 3.0 project tree
+
+First step of a new emission track that lives alongside the existing
+`--emit-c`.  Where `--emit-c` writes a single self-contained C file
+to a stream, `--emit-fmu-c` produces a complete FMU project tree on
+disk — directory layout per the FMI 3.0 archive specification, ready
+to build with cmake into a packaged `.fmu`.
+
+```
+$ ./bin/sml2c --emit-fmu-c test/FmuFoundation.fmu.sysml \
+              --output-dir build/Foundation
+$ cmake -S build/Foundation -B build/Foundation/_build
+$ cmake --build build/Foundation/_build
+$ ctest --test-dir build/Foundation/_build --output-on-failure
+1/1 Test #1: smoke ......................... Passed
+```
+
+The emitter writes 11 files: top-level `CMakeLists.txt`, `include/`
+with `model.h` plus the three vendored `fmi3*.h` headers, `src/fmu.c`
++ `src/model.c`, `src/resources/modelDescription.xml`, and a `test/`
+subtree with its own CMakeLists + `test_fmu.c` smoke test.
+
+**Standards stance: Path A.**  Per the design doc decision in this
+turn's prior chat, the output is plain FMI 3.0 — no FMI-LS-STRUCT,
+no FMI-LS-BUS, no layered standards.  LS-STRUCT v1.0.0-beta.1 is
+narrowly map-shaped and doesn't fit general SysML port shapes;
+forcing it into LS-STRUCT terminology would either misuse the
+standard or invent kinds that aren't in the spec.  When LS-STRUCT
+or another layered standard grows general structured-data support,
+opt-in detection lands as a strict addition.
+
+**Vendored FMI 3.0.2.**  `runtime/fmi3/headers/` carries the three
+official FMI 3.0.2 C headers (fmi3PlatformTypes, fmi3FunctionTypes,
+fmi3Functions); `runtime/fmi3/schema/` carries 12 official XSD
+schemas; `runtime/fmi3/LICENSE.txt` is the BSD-2-Clause from
+modelica/fmi-standard.  Vendored, not fetched at build time, so
+generated FMU projects build offline and reproducibly.  Upgrading
+is a `git clone --branch <new-tag>` + copy.
+
+**v0.25 lowering scope** (per design/fmu-c-codegen.md §5):
+
+| Construct                              | v0.25 status                |
+|----------------------------------------|-----------------------------|
+| Outer part def                         | ✓ becomes the FMU model     |
+| Scalar attribute (Real / Integer / Boolean / String) | ✓ FMI parameter variable |
+| Calc def                               | skip — v0.26                |
+| Constraint                             | skip — v0.26                |
+| Port usage                             | skip — v0.27                |
+| Conjugate port (`~PortDef`)            | skip — v0.27                |
+| Item def with attributes               | skip — v0.27                |
+| Connections / interfaces / flows       | skip — v0.28                |
+| State machines, actions                | skip — v0.30+               |
+
+Each scalar attribute becomes one FMI variable with structured-naming
+convention, `causality="parameter"`, `variability="tunable"`, and the
+correct type tag per the SysML kernel: Real → `<Float64>`, Integer →
+`<Int64>`, Boolean → `<Boolean>`, String → `<String>` (with the
+required child `<Start value="..."/>` element per fmi3Variable.xsd
+rather than the `start=` attribute used by numeric types).
+
+**fmu.c surface.**  All 74 FMI 3.0 entry points are present so the
+shared library is usable by any conformant importer.  Float64,
+Int64, Boolean, and String getters/setters are routed through
+ModelData by value reference using switch statements.  Float32,
+Int8/16/32, UInt8/16/32/64, Binary, Clock, FMU-state save/restore,
+discrete-state evaluation, continuous-state derivatives, event
+indicators, intervals, and shifts all return `fmi3Error` via
+`UNSUPPORTED_*` macros.  Co-Simulation lifecycle (Instantiate /
+EnterInit / ExitInit / DoStep / Reset / Terminate / FreeInstance)
+is fully wired; `fmi3DoStep` is a no-op at v0.25 (model is
+stateless until v0.26 adds calc/check) and returns `fmi3OK`.
+
+**Symbol prefixing.**  `FMI3_FUNCTION_PREFIX=<ModelName>_` is set
+via the CMake target's compile definitions, so an FMU's exported
+symbols are e.g. `Foundation_fmi3InstantiateCoSimulation` —
+prevents collisions when an importer loads multiple FMUs into a
+single process.
+
+**Deterministic instantiation token.**  Generated at codegen time
+via FNV-mixed bytes of the model name.  Same model → same token,
+which lets re-emissions produce reproducible FMUs.
+
+**New build gate `make test-fmu-c` (optional).**  For each
+`test/*.fmu.sysml` fixture: `--emit-fmu-c` into a temp dir →
+`xmllint --schema fmi3ModelDescription.xsd` validates the XML
+output against the official FMI 3.0 schema → `cmake -S . -B _build`
+configures → `cmake --build _build` builds the .so → `ctest`
+runs the smoke test.  Skips silently with a one-line notice if
+`cmake` isn't installed.  Wired into `make sweep`.
+
+**Test fixture.**  `test/FmuFoundation.fmu.sysml` declares one
+part def with one attribute of each kernel scalar type:
+
+```sysml
+package FmuFoundation {
+    private import ScalarValues::*;
+    part def Foundation {
+        attribute mass     : Real    = 200.0;
+        attribute capacity : Integer = 7;
+        attribute label    : String  = "santa";
+        attribute enabled  : Boolean = true;
+    }
+}
+```
+
+The generated `test/test_fmu.c` smoke test asserts:
+1. `fmi3InstantiateCoSimulation` returns non-NULL
+2. `fmi3EnterInitializationMode` + `fmi3ExitInitializationMode` succeed
+3. `fmi3GetFloat64`/`Int64`/`String`/`Boolean` return the source-code defaults
+4. `fmi3DoStep` returns `fmi3OK`
+5. `fmi3Terminate` + `fmi3FreeInstance` cleanly tear down
+
+Output:
+```
+mass = 200
+capacity = 7
+label = santa
+enabled = 1
+```
+
+**Decisions made this turn (per user input):**
+
+- **Optional `make test-fmu-c` gate** — skip silently if cmake
+  missing.  Honest signal (we don't pretend to test what we can't),
+  zero friction for users without cmake installed.
+- **Vendored headers, not FetchContent** — full reproducibility,
+  no network dependency at build time.
+- **One FMU per SysML file** — pick the outermost part def.
+  Multiple top-level part defs require explicit `--root NAME`.
+  Inner part defs and parts are deferred handling (will become
+  separate `.h` struct typedefs in a later version).
+- **Conjugate detection** via `qualifiedName.isConjugated`
+  (confirmed correct field; deferred to v0.27).
+
+**Bugs caught & fixed during the turn:**
+- `DEF_PACKAGE` doesn't exist — packages are their own NodeKind
+  (`NODE_PACKAGE`), not a definition kind.
+- `<String>` uses a child `<Start value="..."/>` element, not the
+  `start=` attribute the numeric variable types accept.
+- Boolean defaults need `fmi3True`/`fmi3False` macros from
+  fmi3PlatformTypes.h, not bare `true`/`false`.
+- The UUID-shaped instantiation token's last group needs a
+  12-hex-digit mask (`0xffffffffffffuL`); my initial mask had 13.
+- `<Terminals>` requires at least one `<Terminal>` child per the
+  XSD, so v0.25 omits TerminalsAndIcons.xml entirely (FMI 3.0
+  allows the file to be absent — it's optional metadata).
+  v0.27 starts populating it from port usages.
+
+**Verification.**  All sweep gates green: 76 strict, 49 graphsml,
+49 test-c, 4 test-c-run (CalcEmit / InitEmit / Thermostat /
+ConstraintEmit), **1 test-fmu-c (new — FmuFoundation)**, 132
+verify-tokens.  PTC parser=0 / default=15.
+
+**Files touched:**
+
+- New: `runtime/fmi3/{headers/*.h,schema/*.xsd,LICENSE.txt,README.md}`,
+  `include/codegen_fmu.h`, `src/codegen_fmu.c` (~900 lines),
+  `test/FmuFoundation.fmu.sysml`.
+- Modified: `main.c` (three new flags), `Makefile` (test-fmu-c
+  target, sweep wiring).
+- No changes to the existing `--emit-c` track.
+
+**What's next (v0.26):** route calc defs and constraints through
+the FMU lifecycle.  Calc def bodies into `src/model.c`, T_init
+called from `fmi3EnterInitializationMode`, T_check called from
+`fmi3ExitInitializationMode` (constraint failure → fmi3Error +
+logger callback message).  Reuses the entire v0.22-v0.24 lowering
+machinery from `--emit-c`; the new code is just the lifecycle
+dispatch and the logger plumbing.
+
+---
+
+## v0.24 — Inline constraints to T_check predicates
+
+Third step of the executable-target pivot.  Every part def with at
+least one inline `assert constraint` member gets a generated
+`Boolean T_check(const T* self)` that returns true iff every
+constraint holds.  Each constraint contributes one early-return
+branch with a stderr message naming the failure.
+
+```sysml
+part def Engine {
+    attribute mass    : Real = 200.0;
+    attribute torque  : Real = 350.0;
+
+    assert constraint sane_mass {
+        mass > 0.0 and mass < 10000.0
+    }
+    assert constraint {
+        torque > 0.0
+    }
+}
+```
+
+emits
+
+```c
+Boolean Engine_check(const Engine* self) {
+    if (!(((self->mass > 0.0) && (self->mass < 10000.0)))) {
+        fprintf(stderr, "Engine.sane_mass failed: mass > 0.0 and mass < 10000.0\n");
+        return false;
+    }
+    if (!((self->torque > 0.0))) {
+        fprintf(stderr, "Engine constraint failed: torque > 0.0\n");
+        return false;
+    }
+    return true;
+}
+```
+
+**Failure message format** (per design doc Q5).  Named constraints:
+`<TypeName>.<name> failed: <source-expr>`.  Anonymous: `<TypeName>
+constraint failed: <source-expr>`.  The source expression is
+recovered from the AST via a new `emitExprAsCString` helper that
+mirrors `emitExpr` but writes SysML's surface syntax (`and` not
+`&&`) and escapes for safe embedding in a `"..."` literal.
+
+**Self-pointer rewriter reused.**  Inside `T_check`, bare-name
+references to sibling attributes get the same `self->name`
+substitution that `T_init` uses, via the shared `currentInitDef`
+field on the codegen context.  No new infrastructure needed.
+
+**Definition emittability extended.**  Until v0.24,
+`definitionEmittable` rejected any def with a non-attribute,
+non-(part/item-usage) member — including constraint usages.  A part
+def with constraints would skip whole-cloth as "not C-emittable."
+v0.24 accepts constraint usages as a third valid member kind: they
+don't contribute to the struct shape but do contribute to T_check.
+The struct-field emitter learned to skip them.
+
+**Runtime header gains `<stdio.h>`.**  `T_check`'s failure messages
+need `fprintf` and `stderr`.  Added to `runtime/sml2c-runtime.h`
+alongside the existing `<stdbool.h>` / `<stdint.h>`.
+
+**Verification.**  All sweep gates green: 76 strict, 49 graphsml,
+49 test-c, **4 test-c-run** (CalcEmit + InitEmit + Thermostat +
+new ConstraintEmit), 132 verify-tokens.  PTC parser=0 / default=15.
+
+The new `ConstraintEmit` test exercises:
+- A part def with three constraints (two named, one anonymous)
+- A second part def with one constraint (cross-def isolation)
+- Driver triggers each violation in turn, captures stderr + bool
+  return through the existing `2>&1` merge in `make test-c-run`
+- Golden file pins the exact failure messages so regressions show
+  up as a diff
+
+```
+Engine defaults: pass
+Battery defaults: pass
+Engine.sane_mass failed: mass > 0.0 and mass < 10000.0
+Engine after mass=-5: fail
+…
+```
+
+**Thermostat status update.**  `Controller` (in `test/Thermostat.sysml`)
+still skips because of its `exhibit state mode : Mode;` member.
+v0.25 will lift state machines and the `exhibit state` field to a
+struct member; at that point Controller will lower fully and we
+get the design doc's running example all the way to a runnable
+program.
+
+**Files touched:** `src/codegen_c.c` (~+150 lines: T_check helpers,
+source-text recovery, constraint-aware emittability,
+struct-field skip);  `runtime/sml2c-runtime.h` (added stdio.h);
+new `test/ConstraintEmit.sysml`, `test/ConstraintEmit.driver.c`,
+`test/expected/ConstraintEmit.expect`.
+
+---
+
 ## v0.23.1 — Thermostat as a real test fixture
 
 User reported a parse error trying to compile the thermostat example

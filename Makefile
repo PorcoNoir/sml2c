@@ -252,7 +252,7 @@ test-c-run: $(BIN)
 # PTC_BASELINE to update the tracked count after a deliberate
 # improvement / regression.
 
-PTC_FILE     ?= ./docs/ptc-25-04-31.sysml
+PTC_FILE     ?= /mnt/user-data/uploads/ptc-25-04-31.sysml
 PTC_BASELINE ?= 15
 
 .PHONY: test-ptc
@@ -282,6 +282,42 @@ test-ptc: $(BIN)
 # prints one summary line per gate, and exits non-zero on any fail.
 # Order is cheapest-first so a regression surfaces quickly.
 
+.PHONY: test-fmu-c
+test-fmu-c: $(BIN)
+	@cmake_bin=$$(command -v cmake); \
+	xmllint_bin=$$(command -v xmllint); \
+	if [ -z "$$cmake_bin" ]; then \
+	    echo "  test-fmu-c skipped: cmake not installed"; \
+	    exit 0; \
+	fi; \
+	pass=0; fail=0; \
+	for f in test/*.fmu.sysml; do \
+	    [ -e "$$f" ] || continue; \
+	    base=$$(basename $$f .fmu.sysml); \
+	    out=/tmp/sml2c-fmu-$$base; \
+	    rm -rf $$out; \
+	    if ! ./$(BIN) --emit-fmu-c $$f --output-dir $$out >/dev/null 2>&1; then \
+	        echo "  FAIL  $$base (emit failed)"; fail=$$((fail+1)); continue; \
+	    fi; \
+	    if [ -n "$$xmllint_bin" ] && ! xmllint --noout \
+	        --schema runtime/fmi3/schema/fmi3ModelDescription.xsd \
+	        $$out/src/resources/modelDescription.xml >/dev/null 2>&1; then \
+	        echo "  FAIL  $$base (XML schema validation)"; fail=$$((fail+1)); continue; \
+	    fi; \
+	    if ! cmake -S $$out -B $$out/_build >/dev/null 2>&1; then \
+	        echo "  FAIL  $$base (cmake configure)"; fail=$$((fail+1)); continue; \
+	    fi; \
+	    if ! cmake --build $$out/_build >/dev/null 2>&1; then \
+	        echo "  FAIL  $$base (cmake build)"; fail=$$((fail+1)); continue; \
+	    fi; \
+	    if ! ctest --test-dir $$out/_build --output-on-failure >/dev/null 2>&1; then \
+	        echo "  FAIL  $$base (ctest)"; fail=$$((fail+1)); continue; \
+	    fi; \
+	    pass=$$((pass+1)); \
+	done; \
+	echo "  FMU build+test: $$pass passed, $$fail failed"; \
+	exit $$fail
+
 .PHONY: sweep
 sweep: $(BIN)
 	@status=0; \
@@ -293,6 +329,8 @@ sweep: $(BIN)
 	$(MAKE) -s test-c          || status=1; \
 	echo "==> test-c-run (cc + ./binary + diff)"; \
 	$(MAKE) -s test-c-run      || status=1; \
+	echo "==> test-fmu-c (--emit-fmu-c + cmake build + ctest)"; \
+	$(MAKE) -s test-fmu-c      || status=1; \
 	echo "==> test-graphsml"; \
 	$(MAKE) -s test-graphsml   || status=1; \
 	echo "==> test-ptc"; \

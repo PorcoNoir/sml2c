@@ -6,6 +6,9 @@
  *   ./sysmlc --emit-json [file]       emit AST as JSON instead of pretty-printed tree
  *   ./sysmlc --emit-sysml [file]      emit canonical SysML (round-trip)
  *   ./sysmlc --emit-c [file]          emit C header (typed-AST first slice)
+ *   ./sysmlc --emit-fmu-c file.sysml \
+ *            --output-dir DIR \         emit FMU project tree (FMI 3.0)
+ *           [--root NAME]               outer part def name (if ambiguous)
  *   ./sysmlc --no-resolve [file]      skip resolver and later passes
  *   ./sysmlc --no-typecheck [file]    skip typechecker and later passes
  *   ./sysmlc --no-redefcheck [file]   skip redefinition checker
@@ -25,6 +28,7 @@
 #include "codegen_json.h"
 #include "codegen_sysml.h"
 #include "codegen_c.h"
+#include "codegen_fmu.h"
 
 static const char* SAMPLE =
     "package MBSEPodcast {\n"
@@ -74,6 +78,9 @@ int main(int argc, char** argv) {
     bool emitJsonMode = false;
     bool emitSysmlMode = false;
     bool emitCMode = false;
+    bool emitFmuMode = false;
+    const char* outputDir = NULL;
+    const char* rootName  = NULL;
     bool skipResolve = false;
     bool skipTypecheck = false;
     bool skipRedefcheck = false;
@@ -85,6 +92,21 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--emit-json")       == 0) emitJsonMode     = true;
         else if (strcmp(argv[i], "--emit-sysml")      == 0) emitSysmlMode    = true;
         else if (strcmp(argv[i], "--emit-c")          == 0) emitCMode        = true;
+        else if (strcmp(argv[i], "--emit-fmu-c")      == 0) emitFmuMode      = true;
+        else if (strcmp(argv[i], "--output-dir")      == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--output-dir requires an argument\n");
+                return 64;
+            }
+            outputDir = argv[++i];
+        }
+        else if (strcmp(argv[i], "--root")            == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--root requires an argument\n");
+                return 64;
+            }
+            rootName = argv[++i];
+        }
         else if (strcmp(argv[i], "--no-resolve")      == 0) skipResolve      = true;
         else if (strcmp(argv[i], "--no-typecheck")    == 0) skipTypecheck    = true;
         else if (strcmp(argv[i], "--no-redefcheck")   == 0) skipRedefcheck   = true;
@@ -119,7 +141,19 @@ int main(int argc, char** argv) {
         if (!skipRefcheck     && !checkReferential(root))   { free(allocated); return 65; }
     }
 
-    if      (emitSysmlMode) emitSysml(stdout, root);
+    if      (emitFmuMode) {
+        if (!outputDir) {
+            fprintf(stderr, "--emit-fmu-c requires --output-dir <DIR>\n");
+            free(allocated);
+            return 64;
+        }
+        const char* vendored = getenv("SML2C_FMI3_DIR");
+        if (!vendored) vendored = "runtime/fmi3";
+        int rc = emitFmuProject(outputDir, root, rootName, vendored);
+        free(allocated);
+        return rc;
+    }
+    else if (emitSysmlMode) emitSysml(stdout, root);
     else if (emitJsonMode)  emitJson(stdout, root);
     else if (emitCMode)     emitC(stdout, root);
     else                    astPrint(root);

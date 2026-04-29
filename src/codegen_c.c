@@ -746,6 +746,177 @@ static void emitInitBody(CCtx* s, const Node* def) {
     fputs("}\n", s->out);
 }
 
+/* ---- T_check emission ------------------------------------------ *
+ *
+ * Each part def with at least one inline `assert constraint` member
+ * gets a generated `bool T_check(const T* self)`.  Each constraint
+ * lowers to:
+ *
+ *     if (!(<expr_lowered>)) {
+ *         fprintf(stderr, "<msg>\n");
+ *         return false;
+ *     }
+ *
+ * Followed by a final `return true;`.  Per Q5 of the design doc:
+ *
+ *     named:     "Engine.sane_mass failed: mass > 0.0 and mass < 10000.0"
+ *     anonymous: "Engine constraint failed: torque > 0"                 */
+
+/* SysML-source text rendering for the supported binary operators.
+ * Used by emitExprAsCString to reconstitute the constraint
+ * expression for the stderr failure message.  Notably differs from
+ * binOpC: SysML uses `and`/`or` words, not C's `&&`/`||`.            */
+static const char* binOpSysmlSrc(TokenType t) {
+    switch (t) {
+    case TOKEN_PLUS:           return "+";
+    case TOKEN_MINUS:          return "-";
+    case TOKEN_STAR:           return "*";
+    case TOKEN_SLASH:          return "/";
+    case TOKEN_LESS:           return "<";
+    case TOKEN_LESS_EQUAL:     return "<=";
+    case TOKEN_GREATER:        return ">";
+    case TOKEN_GREATER_EQUAL:  return ">=";
+    case TOKEN_EQUAL_EQUAL:    return "==";
+    case TOKEN_BANG_EQUAL:     return "!=";
+    case TOKEN_AND:            return "and";
+    case TOKEN_OR:             return "or";
+    default:                   return "?";
+    }
+}
+
+static const char* unOpSysmlSrc(TokenType t) {
+    switch (t) {
+    case TOKEN_MINUS: return "-";
+    case TOKEN_BANG:  return "not ";
+    default:          return "";
+    }
+}
+
+/* Walk an expression and write its SysML-source rendering to s->out,
+ * with C-string special characters (backslash, double-quote)
+ * escaped so the result is safe to drop inside a `"..."` literal. */
+static void emitExprAsCString(CCtx* s, const Node* e) {
+    if (!e) { fputs("?", s->out); return; }
+    switch (e->kind) {
+    case NODE_LITERAL: {
+        Token t = e->as.literal.token;
+        for (int i = 0; i < t.length; i++) {
+            char c = t.start[i];
+            if (c == '\\' || c == '"') fputc('\\', s->out);
+            fputc(c, s->out);
+        }
+        break;
+    }
+    case NODE_QUALIFIED_NAME: {
+        for (int i = 0; i < e->as.qualifiedName.partCount; i++) {
+            if (i > 0) fputs("::", s->out);
+            Token t = e->as.qualifiedName.parts[i];
+            fwrite(t.start, 1, (size_t)t.length, s->out);
+        }
+        break;
+    }
+    case NODE_BINARY:
+        emitExprAsCString(s, e->as.binary.left);
+        fprintf(s->out, " %s ", binOpSysmlSrc(e->as.binary.op.type));
+        emitExprAsCString(s, e->as.binary.right);
+        break;
+    case NODE_UNARY:
+        fprintf(s->out, "%s", unOpSysmlSrc(e->as.unary.op.type));
+        emitExprAsCString(s, e->as.unary.operand);
+        break;
+    case NODE_CALL:
+        if (e->as.call.callee) emitExprAsCString(s, e->as.call.callee);
+        fputc('(', s->out);
+        for (int i = 0; i < e->as.call.args.count; i++) {
+            if (i > 0) fputs(", ", s->out);
+            emitExprAsCString(s, e->as.call.args.items[i]);
+        }
+        fputc(')', s->out);
+        break;
+    case NODE_MEMBER_ACCESS: {
+        emitExprAsCString(s, e->as.memberAccess.target);
+        fputc('.', s->out);
+        Token t = e->as.memberAccess.member;
+        fwrite(t.start, 1, (size_t)t.length, s->out);
+        break;
+    }
+    default:
+        fputs("?", s->out);
+        break;
+    }
+}
+
+/* Does this part def need a T_check function?  Yes if any direct
+ * member is a constraint usage with assertKind == ASSERT_ASSERT and
+ * a non-NULL body.  (Anonymous and named both qualify.)             */
+static bool defNeedsCheck(const Node* def) {
+    if (!def || def->kind != NODE_DEFINITION) return false;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_USAGE) continue;
+        if (m->as.usage.defKind != DEF_CONSTRAINT) continue;
+        if (m->as.usage.assertKind != ASSERT_ASSERT) continue;
+        if (m->as.usage.body) return true;
+    }
+    return false;
+}
+
+static void emitCheckPrototype(CCtx* s, const Node* def) {
+    fprintf(s->out, "Boolean %.*s_check(const %.*s* self);\n",
+            def->as.scope.name.length, def->as.scope.name.start,
+            def->as.scope.name.length, def->as.scope.name.start);
+}
+
+static void emitCheckBody(CCtx* s, const Node* def) {
+    fputc('\n', s->out);
+    fprintf(s->out, "Boolean %.*s_check(const %.*s* self) {\n",
+            def->as.scope.name.length, def->as.scope.name.start,
+            def->as.scope.name.length, def->as.scope.name.start);
+    /* Set currentInitDef so emitQNameC adds `self->` to bare-name
+     * sibling references — same machinery as v0.23 init.  Reused
+     * here because constraint expressions reference attributes by
+     * the same flat-name shape.                                    */
+    s->currentInitDef = def;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_USAGE) continue;
+        if (m->as.usage.defKind != DEF_CONSTRAINT) continue;
+        if (m->as.usage.assertKind != ASSERT_ASSERT) continue;
+        if (!m->as.usage.body) continue;
+
+        /* The C if-condition: lowered expression in C operators. */
+        fputs("    if (!(", s->out);
+        emitExpr(s, m->as.usage.body);
+        fputs(")) {\n", s->out);
+
+        /* The stderr message: SysML-source rendering of the
+         * expression.  Named constraints get `T.NAME failed: ...`;
+         * anonymous get `T constraint failed: ...`. */
+        fputs("        fprintf(stderr, \"", s->out);
+        if (m->as.usage.name.length > 0) {
+            fprintf(s->out, "%.*s.%.*s failed: ",
+                    def->as.scope.name.length, def->as.scope.name.start,
+                    m->as.usage.name.length,    m->as.usage.name.start);
+        } else {
+            fprintf(s->out, "%.*s constraint failed: ",
+                    def->as.scope.name.length, def->as.scope.name.start);
+        }
+        /* Disable currentInitDef during source-text rendering so
+         * bare names render as themselves, not `self->name`.       */
+        const Node* save = s->currentInitDef;
+        s->currentInitDef = NULL;
+        emitExprAsCString(s, m->as.usage.body);
+        s->currentInitDef = save;
+        fputs("\\n\");\n", s->out);
+
+        fputs("        return false;\n", s->out);
+        fputs("    }\n", s->out);
+    }
+    s->currentInitDef = NULL;
+    fputs("    return true;\n", s->out);
+    fputs("}\n", s->out);
+}
+
 /* ---- __sml2c_init emission --------------------------------------- *
  *
  * Top-level non-const attributes (those whose default contains a
@@ -776,12 +947,12 @@ static void emitProgramInit(CCtx* s) {
 
 /* ---- definitions: pre-flight check --------------------------- */
 
-/* A definition is C-emittable iff every direct member is either an
- * attribute we can lower to a primitive C field, or a part/item usage
- * whose type is itself an already-registered emittable definition.
- * Anything else (behavioral members, calc bodies, ports, connections)
- * means the definition would be partially modeled, which is worse
- * than skipping cleanly.                                            */
+/* A definition is C-emittable iff every direct member is one of:
+ *   - an attribute we can lower to a primitive C field
+ *   - a part/item usage whose type is itself an emittable definition
+ *   - a constraint usage with `assert constraint NAME { expr }` shape
+ *     (these contribute to T_check, not to the struct shape)
+ * Behavioral members, ports, connections still block.            */
 static bool definitionEmittable(const CCtx* s, const Node* def) {
     if (def->kind != NODE_DEFINITION) return false;
     DefKind dk = def->as.scope.defKind;
@@ -797,10 +968,18 @@ static bool definitionEmittable(const CCtx* s, const Node* def) {
             if (attributeMultiplicity(m, NULL) == MULT_UNSUPPORTED) return false;
         } else if (m->kind == NODE_USAGE) {
             DefKind mdk = m->as.usage.defKind;
-            if (mdk != DEF_PART && mdk != DEF_ITEM) return false;
-            if (m->as.usage.name.length == 0) return false;
-            if (!usageHasEmittableType(s, m))   return false;
-            if (usageMultiplicity(m, NULL) == MULT_UNSUPPORTED) return false;
+            if (mdk == DEF_PART || mdk == DEF_ITEM) {
+                if (m->as.usage.name.length == 0) return false;
+                if (!usageHasEmittableType(s, m))   return false;
+                if (usageMultiplicity(m, NULL) == MULT_UNSUPPORTED) return false;
+            } else if (mdk == DEF_CONSTRAINT
+                    && m->as.usage.assertKind == ASSERT_ASSERT
+                    && m->as.usage.body != NULL) {
+                /* Inline `assert constraint NAME? { expr }` — fine.
+                 * The body contributes to T_check; not a struct field. */
+            } else {
+                return false;
+            }
         } else {
             return false;
         }
@@ -831,6 +1010,9 @@ static void emitDefinitionFromRegistry(CCtx* s, const Node* def) {
                         m->as.attribute.name.start);
             }
         } else if (m->kind == NODE_USAGE) {
+            /* Constraint usages are members of the def for T_check
+             * purposes but don't contribute a struct field. */
+            if (m->as.usage.defKind == DEF_CONSTRAINT) continue;
             const Node* td = resolvedTypeDef(m);
             long n = 0;
             MultKind mk = usageMultiplicity(m, &n);
@@ -1042,6 +1224,18 @@ void emitC(FILE* out, const Node* program) {
             emitInitPrototype(&s, s.emittable.items[i]);
         }
     }
+
+    /* Pass 2c.5 — T_check prototypes (forward decls). */
+    bool anyCheck = false;
+    for (int i = 0; i < s.emittable.count; i++) {
+        if (defNeedsCheck(s.emittable.items[i])) anyCheck = true;
+    }
+    if (anyCheck && !anyInit) fputc('\n', out);
+    for (int i = 0; i < s.emittable.count; i++) {
+        if (defNeedsCheck(s.emittable.items[i])) {
+            emitCheckPrototype(&s, s.emittable.items[i]);
+        }
+    }
     if (s.topLevelL2.count > 0 || anyInit) {
         /* Forward-declare __sml2c_init so user code can call it
          * before its definition appears (which is at end of file). */
@@ -1056,6 +1250,13 @@ void emitC(FILE* out, const Node* program) {
     for (int i = 0; i < s.emittable.count; i++) {
         if (defNeedsInit(&s, s.emittable.items[i])) {
             emitInitBody(&s, s.emittable.items[i]);
+        }
+    }
+
+    /* Pass 2f — T_check bodies. */
+    for (int i = 0; i < s.emittable.count; i++) {
+        if (defNeedsCheck(s.emittable.items[i])) {
+            emitCheckBody(&s, s.emittable.items[i]);
         }
     }
 

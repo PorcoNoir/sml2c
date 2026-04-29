@@ -1,0 +1,10 @@
+Engine defaults: pass
+Battery defaults: pass
+Engine.sane_mass failed: mass > 0.0 and mass < 10000.0
+Engine after mass=-5: fail
+Engine.sane_torque failed: torque > 0.0
+Engine after torque=0: fail
+Engine constraint failed: redline < 12000.0
+Engine after redline=15000: fail
+Battery.healthy_voltage failed: voltage > 10.0
+Battery after voltage=5: fail
