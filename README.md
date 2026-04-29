@@ -151,20 +151,20 @@ deliberate improvement / acceptable regression.
 
 ## Status
 
-v0.23.  All sweep gates green:
+v0.23.1.  All sweep gates green:
 
 ```
 $ make sweep
 ==> verify-tokens
 OK: all 132 referenced tokens are declared.
 ==> test-all (strict)
-  73 passed, 0 failed
+  76 passed, 0 failed
 ==> test-c (cc -fsyntax-only)
-  C codegen: 46 passed, 0 failed
+  C codegen: 49 passed, 0 failed
 ==> test-c-run (cc + ./binary + diff)
-  C runtime: 2 passed, 0 failed
+  C runtime: 3 passed, 0 failed
 ==> test-graphsml
-  graphsml adapter: 46 passed, 0 failed
+  graphsml adapter: 49 passed, 0 failed
 ==> test-ptc
   PTC: parser=0, default=15 (baseline 15)
 

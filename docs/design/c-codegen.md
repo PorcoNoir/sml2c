@@ -79,7 +79,7 @@ package Thermostat {
     calc def ResponsePower {
         in error : Real;
         in gain  : Real;
-        return out : Real = error * gain;
+        return power : Real = error * gain;
     }
 
     /* Three-mode state machine: idle, heating, cooling. */
@@ -775,5 +775,36 @@ Nested struct field init: outer T_init calls inner `T_init`
 before any sibling assignments.  Cross-level dependencies
 (`attribute total = engine.power`) deferred — the member-access
 lowering is still future work.
+
+#### 2026-04-29 — v0.23.1: thermostat example as a real test file
+
+User reported parse error compiling the thermostat example from §2:
+
+```
+[line 8] Error at 'out': Expected ';' after return.
+Parse failed.
+```
+
+Root cause: the example used `return out : Real = ...`, but `out`
+is the direction-modifier keyword (TOKEN_OUT).  The parser's
+return-feature-name production at parser_decl.c:1856 only accepts
+TOKEN_IDENTIFIER, so `out` falls through and the parser later
+reports the missing semicolon.
+
+Fix: renamed `out` → `power` in the design doc's running example.
+Power is the right semantic name anyway — the calc returns the
+power output computed from the temperature error.
+
+Shipped the running example as `test/Thermostat.sysml` so the
+parse path is exercised in `make sweep` going forward.  The file
+won't fully lower until v0.24 (constraints) and v0.25 (state
+machines) — `Controller` skips because of the inline constraints,
+`Mode` skips because state machines aren't lowered yet — but the
+calc def `ResponsePower` lowers correctly through v0.23.
+
+The broader "direction keywords as feature names" parser bug
+remains; the SysML spec arguably allows it but our parser
+doesn't.  Deferred — none of the project's other test or
+reference files trip it.
 
 (empty — to be populated as turns ship)

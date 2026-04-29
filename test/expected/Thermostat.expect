@@ -1,0 +1,3 @@
+ResponsePower(2, 100) = 200
+ResponsePower(-1, 50) = -50
+ResponsePower(0, 100) = 0
