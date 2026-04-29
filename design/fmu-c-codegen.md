@@ -615,6 +615,194 @@ Both stay supported.  Neither replaces the other.
 
 ## 12. Decision log
 
+#### 2026-04-29 — v0.30: connection/interface metadata shipped (F13)
+
+`interface def` and `connection def` declarations now contribute
+`<Annotations>` blocks on each Terminal whose port-def type they
+reference.  Each annotation lists `defName`, `endName`, and the
+end's `conjugated` flag.  Importers that recognize the
+`dev.sml2c.interface` and `dev.sml2c.connection` annotation types
+can pair Terminals across two FMUs that share a declared
+interface; importers that don't fall back to the generic
+conjugate-rule matching.
+
+Decision: kept matchingRule generic
+(`dev.sml2c.port.conjugate`) instead of specializing per
+interface.  Specializing would *restrict* importer matching too
+far — Terminals from FMUs whose SysML sources don't share the
+interface declaration would no longer pair.  Annotations are
+purely additive metadata.
+
+Decision: emit ALL ends of a referencing interface, not just the
+end whose conjugation flag matches the Terminal.  Importers
+benefit from seeing the full pairing topology — they can find
+the conjugate end by inverting the `conjugated` flag.  Filtering
+to "matching end only" would force the importer to know the
+conjugate is the same interface, which is information we already
+have.
+
+The IfaceEndIndex is built once per FMU (in emitTerminalsAndIcons,
+before the per-Terminal loop) by walking the program tree
+recursively into packages.  Capacity 32 entries; programs with
+more interface ends than that get silently truncated.  Realistic
+SysML usage rarely exceeds a handful of interface defs per
+project, so this is well over the realistic ceiling.
+
+This entry closes the F1-F13 static-structural FMU lowering scope
+documented in §5 of this design doc.  Sections §10 (out of scope
+for v1) and §11 (composition with existing tracks) describe what
+comes after — state machines as discrete events, ME/SE modes,
+multi-cardinality ports, runtime connections.  Each is its own
+self-contained design pass.
+
+#### 2026-04-29 — v0.29: structured items shipped (F12)
+
+Items whose attributes are themselves item-typed now recursively
+flatten — leaf scalars at any depth become FMI variables under
+their port's Terminal.  The visitor's `onPortItemAttr` callback
+signature changed from `(p, iu, ia, dir, vr, ctx)` to
+`(p, iu, attrPath[], pathLen, dir, vr, ctx)` where `attrPath` is
+the chain of attribute nodes from the item-def member's first
+level down to the leaf scalar.  v0.28 input shapes still work
+unchanged (pathLen=1).
+
+Cycle and depth protection: `FMU_MAX_NEST = 8` caps the recursion
+stack; a per-walk `seen[]` array breaks cycles by skipping any
+item def already on the stack.  Tested manually with a
+self-referential `item def Node { attribute next : Node; }` —
+emits the leaf scalars once and stops at the recursive attribute.
+
+Decision: cycle-encountered case silently skips rather than
+emitting an error or a placeholder variable.  Rationale:
+self-referential item defs in SysML usually represent linked
+data structures (lists, trees) that don't have a fixed FMI
+representation anyway.  An error would block legitimate models
+that just don't fully exercise their item graphs at FMU level.
+
+Decision: didn't unify the Terminal walk with the visitor.  The
+per-port grouping in TerminalsAndIcons.xml means each Terminal
+needs to know its own boundaries; threading that through the
+visitor's flat per-variable callback would require a "begin/end
+Terminal" pair of callbacks just for one consumer.  Kept the
+recursive helper `emitTerminalItemMembers` separate.  The
+duplication with `walkItemAttrs` is ~30 lines, acceptable cost
+for a cleaner visitor API.
+
+Two path-emit helpers `emitItemPathDots` and
+`emitItemPathUnders` factor out the FMI-name vs C-identifier
+formatting that every callback needs.  Worth the indirection
+because it eliminates six near-identical `fprintf` ladders.
+
+#### 2026-04-29 — v0.28: items with scalar attributes shipped (F11)
+
+Items declared with scalar attributes flatten under their parent
+Terminal — each attribute becomes its own FMI scalar variable
+named `<port>.<item>.<attr>`, with the parent item's effective
+direction (after conjugate flip).  The empty-item path from
+v0.27 (Binary, presence-only signal) and the new attribute path
+coexist within the same port def, with VR allocation interleaving
+by source order.
+
+Implementation cost was lower than the v0.27 estimate because
+the v0.27.1 refactor had already routed every VR-allocating walk
+through the visitor.  v0.28 added one callback type to
+`FmuVarVisitor`, one branch to `walkFmuVars`, and one new
+emitter callback per emitter (six total: model.h vr/field,
+modelDescription, terminals, fmu.c stubs, test driver).  Net
+~150 lines, all additive.
+
+Naming convention chosen:
+
+- C identifier: `<port>_<item>_<attr>` (underscores for hierarchy)
+- FMI structured name: `<port>.<item>.<attr>` (dots per FMI 3.0 §2.4.3)
+- TerminalMemberVariable's `memberName`: `<item>.<attr>` (path
+  relative to the port; importers can render the Terminal
+  hierarchically or flatten to dotted names depending on UX)
+
+Variability set to `discrete` for these per-item-attribute
+variables (vs `tunable` for top-level part def attributes
+treated as parameters).  Per FMI 3.0 §2.4.7 this matches the
+intent: item attributes change at simulation events, parameters
+are configured at instantiation.
+
+F12 (structured items: items whose attributes are themselves
+items) is the next layer — recursive flattening with deeper
+structured names.  Not blocked on anything; the visitor's
+branch structure is ready to add another recursion level.
+
+#### 2026-04-29 — v0.27.1: internal refactor of codegen_fmu.c
+
+Patch release.  Three internal cleanups: routed Binary case-
+emitting through the visitor (eliminating the last manual
+VR-allocating walk), split `emitFmuC_Boilerplate_Bottom` from
+299 lines into a 9-line orchestrator + 7 named feature-bucketed
+helpers, and rewrote the file-header comment to reflect the
+current shipped versions and document the layout.  All four
+v0.27 fixtures produce byte-identical generated FMU output
+before and after.  No SysML behavior change.
+
+#### 2026-04-29 — v0.27: ports → Terminals shipped
+
+Port usages on the outer part def now lower to FMI 3.0 Terminals
+with structured-named member variables.  Conjugate ports
+(`~PortDef`) flip every member's causality.  Items with no
+attributes lower as `fmi3Binary` carriers backed by 256-byte
+bounded buffers + `size_t` length in `ModelData`.
+
+Custom kinds chosen:
+
+- `terminalKind="dev.sml2c.port"` — every Terminal we emit
+- `matchingRule="dev.sml2c.port.conjugate"` — pairing rule for
+  importers that want to auto-wire ports across two FMUs
+- `variableKind="dev.sml2c.port.flow"` — every member variable
+
+Reverse-domain namespace per FMI 3.0 §2.4.5 keeps these
+forward-compatible with importers that recognize them while
+degrading gracefully (plain Terminals + Binary I/O) for those
+that don't.
+
+The visitor pattern (`FmuVarVisitor`, `walkFmuVars`) was added
+to keep VR allocation lockstep across `model.h`, `model.c`,
+`modelDescription.xml`, `fmu.c` get/set switch statements, and
+the test-driver readbacks.  Without it, port-binary VRs
+interleaved with attribute VRs would have been numbered
+independently in each emitter.
+
+Test fixtures `SleighFmu.fmu.sysml` and `ReindeerFmu.fmu.sysml`
+exercise both sides — same port def, opposite causalities.
+Both XML files validate against `fmi3ModelDescription.xsd` and
+`fmi3TerminalsAndIcons.xsd`.  A manual round-trip confirmed
+`fmi3SetBinary` of 5 bytes survives `fmi3GetBinary`.
+
+Items with scalar attributes (the F11 design item) are still
+deferred — the running fixture uses empty items, so v0.27 ships
+without that path.  v0.28 picks it up.
+
+#### 2026-04-29 — v0.26: calc/check shipped
+
+Calc defs and inline `assert constraint` blocks now wire through the
+FMI 3.0 lifecycle:
+
+- Calc def → `fmi3Float64 F(fmi3Float64 a, fmi3Float64 b)` in
+  `src/model.c`.
+- Attribute defaults that involve calc-def calls or arithmetic
+  expressions lower correctly via the new `emitFmuExpr` walker
+  with `m->` prefix for member references.
+- Inline assert constraint → branch in `model_check`, which is
+  called from `fmi3ExitInitializationMode`.  Failure routes the
+  per-constraint message through the `fmi3LogMessageCallback`
+  the importer gave us at Instantiate (not stderr like
+  `--emit-c`) and returns `fmi3Error`.
+
+Self-contained additions in `codegen_fmu.c` — no shared state with
+the `--emit-c` track's expression emitter.  The duplication is
+~150 lines of recursive descent; if it grows materially in v0.27+,
+factoring out a shared expression-emitter module is the cleanup.
+
+Test fixture `FmuConstraints.fmu.sysml` exercises both paths:
+calc-driven init (`power = 5000`) and constraint violation
+(captured via the auto-generated test driver's static log buffer).
+
 #### 2026-04-29 — v0.25: foundation shipped
 
 Project tree, vendored FMI 3.0.2 headers + schemas, FMI 3.0 entry-point

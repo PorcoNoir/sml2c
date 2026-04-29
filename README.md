@@ -151,7 +151,7 @@ deliberate improvement / acceptable regression.
 
 ## Status
 
-v0.25.  All sweep gates green:
+v0.30.  All sweep gates green:
 
 ```
 $ make sweep
@@ -164,7 +164,7 @@ OK: all 132 referenced tokens are declared.
 ==> test-c-run (cc + ./binary + diff)
   C runtime: 4 passed, 0 failed
 ==> test-fmu-c (--emit-fmu-c + cmake build + ctest)
-  FMU build+test: 1 passed, 0 failed
+  FMU build+test: 7 passed, 0 failed
 ==> test-graphsml
   graphsml adapter: 49 passed, 0 failed
 ==> test-ptc
@@ -178,15 +178,20 @@ The current focus split across two emission tracks:
 **`--emit-c`** — single-file standalone C library (the executable-target
 pivot from `design/c-codegen.md`).  v0.22 calc defs → C functions,
 v0.22.1 typedefs in `runtime/sml2c-runtime.h`, v0.23 T_init +
-__sml2c_init, v0.24 T_check predicates.  v0.25-v0.28 paused on this
-track; state machines pick up at v0.30+.
+__sml2c_init, v0.24 T_check predicates.  Paused on this track;
+state machines pick up at v0.31+.
 
-**`--emit-fmu-c`** — multi-file FMI 3.0 FMU project tree (new in
-v0.25; design at `design/fmu-c-codegen.md`).  v0.25 ships the
-foundation (project layout, vendored FMI 3.0.2 headers, FMI 3.0
-entry-point surface, scalar attributes as parameter variables).
-v0.26-v0.28 will route calc/check through the FMU lifecycle, lower
-ports to Terminals, and emit conjugate-pair matching metadata.
+**`--emit-fmu-c`** — multi-file FMI 3.0 FMU project tree
+(`design/fmu-c-codegen.md`).  v0.25-v0.30 closes the
+static-structural lowering scope (F1-F13): foundation,
+calc + constraints, ports → Terminals with conjugate causality
+flip, items as Binary, items with scalar attributes flattened,
+recursive flattening through item-typed attributes, and
+connection/interface metadata as Terminal annotations.
+v0.31+ continues with state machines as discrete events,
+Model Exchange / Scheduled Execution modes, multi-cardinality
+port usages, and runtime FMU connections — each a distinct
+follow-on design pass.
 
 ## License & origin
 
