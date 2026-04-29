@@ -94,9 +94,11 @@ back-ends to read.
 │   │                         pass the full pipeline)
 │   └── bad/*.sysml           negative tests (every file must be
 │                             rejected somewhere in the pipeline)
+├── runtime/
+│   └── sml2c-runtime.h      typedefs for emitted code (Real, MassValue,…)
 ├── tools/
-│   └── sml2c_to_graphsml.py  drawio adapter over --emit-json output
-├── verify-tokens.sh          parser ↔ scanner token-symbol drift check
+│   └── sml2c_to_graphsml.py drawio adapter over --emit-json output
+├── verify-tokens.sh         parser ↔ scanner token-symbol drift check
 ├── Makefile                  build + sweep gates
 ├── CHANGELOG.md              per-version notes
 ├── chat_history.md           project narrative
@@ -149,7 +151,7 @@ deliberate improvement / acceptable regression.
 
 ## Status
 
-v0.22.  All sweep gates green:
+v0.22.1.  All sweep gates green:
 
 ```
 $ make sweep
@@ -171,8 +173,10 @@ sweep: all gates green
 
 The current focus is the executable-target pivot from
 `design/c-codegen.md`: lift `--emit-c` from structural lowering to a
-runnable C program.  v0.22 (calc defs → C functions) shipped; v0.23
-(init functions for part defs + topo-sorted top-level inits) is next.
+runnable C program.  v0.22 (calc defs → C functions) and v0.22.1
+(typedefs in `runtime/sml2c-runtime.h` for kernel + ISQ types)
+shipped; v0.23 (init functions for part defs + topo-sorted top-level
+inits) is next.
 
 ## License & origin
 

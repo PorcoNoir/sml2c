@@ -1,13 +1,17 @@
 /* Hand-written test driver for test/CalcEmit.sysml.  Linked against
- * the C output of `sml2c --emit-c test/CalcEmit.sysml`.  Calls each
- * generated calc function with known inputs and prints results in a
- * stable format that test-c-run diffs against test/expected/CalcEmit.expect. */
+ * the C output of `sml2c --emit-c test/CalcEmit.sysml`.  Uses the
+ * SysML-named typedefs from sml2c-runtime.h (Real, Integer, …) so the
+ * driver's signatures match the generated function prototypes
+ * exactly — the C compiler would accept `double` here too (Real *is*
+ * double, after typedef resolution), but using Real makes the
+ * interop with generated code self-documenting. */
 
 #include <stdio.h>
+#include "sml2c-runtime.h"
 
-double Square(double x);
-double Scale(double mass, double factor);
-double SumOfSquares(double a, double b);
+Real Square(Real x);
+Real Scale(Real mass, Real factor);
+Real SumOfSquares(Real a, Real b);
 
 int main(void) {
     printf("Square(3) = %g\n", Square(3.0));

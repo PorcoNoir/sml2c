@@ -188,7 +188,7 @@ test-c: $(BIN)
 	@pass=0; fail=0; \
 	for f in $(TEST_FILES); do \
 	    base=$$(basename $$f); \
-	    out=$$(./$(BIN) --emit-c $$f 2>/dev/null | $(CC) -std=c11 -fsyntax-only -x c - 2>&1); \
+	    out=$$(./$(BIN) --emit-c $$f 2>/dev/null | $(CC) -std=c11 -I runtime -fsyntax-only -x c - 2>&1); \
 	    if [ $$? -eq 0 ]; then \
 	        pass=$$((pass+1)); \
 	    else \
@@ -223,7 +223,7 @@ test-c-run: $(BIN)
 	    if [ ! -f "$$exp" ]; then \
 	        echo "  FAIL  $$base (missing $$exp)"; fail=$$((fail+1)); continue; fi; \
 	    ./$(BIN) --emit-c "$$src" > /tmp/sml2c-$$base.c 2>/dev/null; \
-	    if ! $(CC) -std=c11 -o /tmp/sml2c-$$base /tmp/sml2c-$$base.c "$$drv" 2>/tmp/sml2c-$$base.cc.log; then \
+	    if ! $(CC) -std=c11 -I runtime -o /tmp/sml2c-$$base /tmp/sml2c-$$base.c "$$drv" 2>/tmp/sml2c-$$base.cc.log; then \
 	        echo "  FAIL  $$base (compile failed)"; \
 	        sed 's/^/        /' /tmp/sml2c-$$base.cc.log; \
 	        fail=$$((fail+1)); continue; fi; \

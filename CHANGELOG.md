@@ -9,6 +9,79 @@ the working tree at the time of release.
 
 ---
 
+## v0.22.1 — Runtime header for kernel + ISQ types
+
+Refinement to v0.22 prompted by user clarification.  Until now,
+`cFieldTypeFor` returned C-primitive names (`"double"`, `"long long"`,
+`"bool"`, `"const char*"`) inline at the codegen level — the SysML
+type names (`Real`, `Integer`, `Boolean`, `String`, `Number`)
+dissolved at emit time and the generated C had no trace of the
+kernel data type library.  ISQ engineering quantities
+(`MassValue`, `TorqueValue`, …) didn't lower at all — any attribute
+typed with one got skipped because `cFieldTypeFor` returned NULL.
+
+v0.22.1 lifts the type catalog into a project-shipped runtime
+header (`runtime/sml2c-runtime.h`):
+
+```c
+/* sml2c-runtime.h excerpt */
+typedef double      Real;
+typedef long long   Integer;
+typedef bool        Boolean;
+typedef const char* String;
+typedef double      Number;
+
+typedef Real LengthValue;
+typedef Real MassValue;
+typedef Real TorqueValue;
+typedef Real ForceValue;
+/* … */
+```
+
+Generated `.c` files now `#include "sml2c-runtime.h"` and refer to
+SysML's type names directly:
+
+```c
+/* before v0.22.1 */                /* v0.22.1 onward */
+typedef struct {                    typedef struct {
+    double mass;                        Real mass;
+    long long capacity;                 Integer capacity;
+    const char* name;                   String name;
+    bool electric;                      Boolean electric;
+} Vehicle;                          } Vehicle;
+```
+
+The C compiler still treats them identically (typedef is purely a
+naming layer), but the generated source preserves SysML's intent
+and is much more self-documenting.
+
+**ISQ.**  Engineering quantity types are listed in the header as
+typedefs of `Real` — about 20 of them, covering the most common
+quantities (length, mass, torque, force, energy, power, speed,
+frequency, etc.).  Names match the SysML standard library.  This
+positions us correctly for ISQ resolution work later: when
+`attribute mass : ISQ::MassValue;` resolves at the typechecker
+level, the codegen will already know what to lower it as.
+
+**Trade-off explicit:** typedefs of `double` are interchangeable
+at the C level, so dimensional errors (`Mass m = some_force_value;`)
+won't be caught.  The header preserves *intent* without claiming
+dimensional safety.  Future work could lift the typedefs into
+tagged structs (`typedef struct { Real value; } MassValue;`) for
+real dimensional safety, with that change confined to the header.
+
+**Build change.**  `make test-c` and `make test-c-run` pass
+`-I runtime` so cc finds the header.
+
+**Files touched:** new `runtime/sml2c-runtime.h`; modified
+`src/codegen_c.c` (cFieldTypeFor returns SysML names; emit
+`#include "sml2c-runtime.h"` instead of stdbool/stdint), `Makefile`
+(add `-I runtime`), `test/CalcEmit.driver.c` (uses Real now to
+demonstrate interop), `design/c-codegen.md` (new §4 documenting
+the runtime header; thermostat example updated).
+
+---
+
 ## v0.22 — Calc defs to C functions
 
 First step of the executable-target pivot from
