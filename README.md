@@ -151,7 +151,7 @@ deliberate improvement / acceptable regression.
 
 ## Status
 
-v0.22.1.  All sweep gates green:
+v0.23.  All sweep gates green:
 
 ```
 $ make sweep
@@ -162,7 +162,7 @@ OK: all 132 referenced tokens are declared.
 ==> test-c (cc -fsyntax-only)
   C codegen: 46 passed, 0 failed
 ==> test-c-run (cc + ./binary + diff)
-  C runtime: 1 passed, 0 failed
+  C runtime: 2 passed, 0 failed
 ==> test-graphsml
   graphsml adapter: 46 passed, 0 failed
 ==> test-ptc
@@ -173,10 +173,10 @@ sweep: all gates green
 
 The current focus is the executable-target pivot from
 `design/c-codegen.md`: lift `--emit-c` from structural lowering to a
-runnable C program.  v0.22 (calc defs → C functions) and v0.22.1
-(typedefs in `runtime/sml2c-runtime.h` for kernel + ISQ types)
-shipped; v0.23 (init functions for part defs + topo-sorted top-level
-inits) is next.
+runnable C program.  v0.22 (calc defs → C functions), v0.22.1 (runtime
+header for kernel + ISQ types), and v0.23 (T_init per part def +
+__sml2c_init for top-level non-const, both topo-sorted) shipped;
+v0.24 (constraints → check predicates) is next.
 
 ## License & origin
 

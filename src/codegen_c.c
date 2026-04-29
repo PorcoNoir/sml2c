@@ -48,6 +48,18 @@ typedef struct {
      * emitted by registry passes (so the descent doesn't try to
      * print them again as skipped).                                  */
     EmittableDefs calcs;
+    /* Top-level attributes whose default value is a non-constant
+     * expression (contains a function call).  Hoisted to non-const
+     * globals + assignment in the generated `__sml2c_init` function.
+     * Populated during the visitor walk in `onAttribute`; consumed
+     * after the walk to emit the init function body.                */
+    EmittableDefs topLevelL2;
+    /* Set during T_init body emission so emitQNameC knows to prepend
+     * `self->` for bare-name references that resolve to attributes of
+     * `currentInitDef`.  NULL outside an init body (top-level or
+     * calc-def context — in those, bare names lower to file-scope or
+     * local C identifiers, not struct-field accesses).               */
+    const Node* currentInitDef;
 } CCtx;
 
 static bool isEmittable(const CCtx* s, const Node* def) {
@@ -206,14 +218,36 @@ static void emitLiteralC(CCtx* s, const Node* lit) {
     }
 }
 
+/* True iff `candidate` is one of `def`'s direct members.  Used by
+ * emitQNameC to detect bare-name references inside a T_init body
+ * that should be rewritten with a `self->` prefix.                 */
+static bool isMemberOf(const Node* def, const Node* candidate) {
+    if (!def || !candidate) return false;
+    if (def->kind != NODE_DEFINITION) return false;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        if (def->as.scope.members[i] == candidate) return true;
+    }
+    return false;
+}
+
 static void emitQNameC(CCtx* s, const Node* q) {
     /* Flat lowering: emit the LAST part of a dotted/scoped reference.
      * For first-slice expressions this matches the C scope where the
      * referenced name was emitted as a static const at file scope.
      * Cross-package references and member accesses through structs
-     * are left for a later iteration.                                */
+     * are left for a later iteration.
+     *
+     * Special case: inside a T_init body (currentInitDef set), a
+     * single-segment reference whose `resolved` decl is a member of
+     * the enclosing T rewrites to `self-><name>`.  This makes
+     * defaults like `area = pi*r*r` lower correctly to
+     * `self->pi * self->r * self->r`. */
     int n = q->as.qualifiedName.partCount;
     if (n == 0) { fputs("/*?*/", s->out); return; }
+    if (n == 1 && s->currentInitDef
+              && isMemberOf(s->currentInitDef, q->as.qualifiedName.resolved)) {
+        fputs("self->", s->out);
+    }
     Token last = q->as.qualifiedName.parts[n - 1];
     fwrite(last.start, 1, (size_t)last.length, s->out);
 }
@@ -480,8 +514,8 @@ static void collectCalcDefs(CCtx* s, Node* program) {
 
 /* True iff an expression contains any function-call subnode.  Used to
  * gate top-level `static const` emission: C doesn't allow function
- * calls in const initializers, so we skip with a comment until v0.23
- * lifts these into a runtime `__sml2c_init`.                         */
+ * calls in const initializers, so we hoist these to non-const
+ * globals + assignment in `__sml2c_init`.                           */
 static bool exprContainsCall(const Node* e) {
     if (!e) return false;
     switch (e->kind) {
@@ -491,6 +525,253 @@ static bool exprContainsCall(const Node* e) {
     case NODE_UNARY:   return exprContainsCall(e->as.unary.operand);
     default:           return false;
     }
+}
+
+/* ---- topological sort for init ordering -------------------------- *
+ *
+ * Both T_init (per part def) and __sml2c_init (top-level non-const
+ * attributes) need to assign attributes in dependency order so an
+ * initializer doesn't read an uninitialized sibling.  Build a directed
+ * graph (X depends on Y iff X's default expression references Y),
+ * DFS-with-three-colors, emit assignments in topo order.  Cycles
+ * produce a codegen comment listing the cycle and skip the affected
+ * init function.                                                    */
+
+typedef enum { COLOR_WHITE = 0, COLOR_GRAY, COLOR_BLACK } TopoColor;
+
+typedef struct {
+    const Node** attrs;     /* attribute set we're sorting */
+    int          count;
+    TopoColor*   colors;
+    const Node** sorted;    /* output buffer (capacity == count)   */
+    int          sortedCount;
+    bool         cycleFound;
+} TopoState;
+
+static int topoIndexOf(const TopoState* t, const Node* attr) {
+    for (int i = 0; i < t->count; i++) {
+        if (t->attrs[i] == attr) return i;
+    }
+    return -1;
+}
+
+static void topoVisitNode(TopoState* t, const Node* attr);
+
+static void topoVisitDeps(TopoState* t, const Node* expr) {
+    if (!expr) return;
+    switch (expr->kind) {
+    case NODE_QUALIFIED_NAME: {
+        /* Single-segment reference to a sibling attribute creates a
+         * dependency edge.  Multi-segment qnames (cross-type or
+         * package-qualified) don't enter the local context's graph;
+         * they reference values that are already defined elsewhere. */
+        if (expr->as.qualifiedName.partCount == 1) {
+            const Node* resolved = expr->as.qualifiedName.resolved;
+            if (resolved && topoIndexOf(t, resolved) >= 0) {
+                topoVisitNode(t, resolved);
+            }
+        }
+        break;
+    }
+    case NODE_BINARY:
+        topoVisitDeps(t, expr->as.binary.left);
+        topoVisitDeps(t, expr->as.binary.right);
+        break;
+    case NODE_UNARY:
+        topoVisitDeps(t, expr->as.unary.operand);
+        break;
+    case NODE_CALL:
+        /* Calls don't depend on the callee — calc defs are forward-
+         * declared at file scope before any init function runs.
+         * Arguments do create dependencies on whatever they read.    */
+        for (int i = 0; i < expr->as.call.args.count; i++) {
+            topoVisitDeps(t, expr->as.call.args.items[i]);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static void topoVisitNode(TopoState* t, const Node* attr) {
+    int idx = topoIndexOf(t, attr);
+    if (idx < 0) return;
+    if (t->colors[idx] == COLOR_BLACK) return;
+    if (t->colors[idx] == COLOR_GRAY) {
+        t->cycleFound = true;
+        return;
+    }
+    t->colors[idx] = COLOR_GRAY;
+    if (attr && attr->kind == NODE_ATTRIBUTE && attr->as.attribute.defaultValue) {
+        topoVisitDeps(t, attr->as.attribute.defaultValue);
+    }
+    t->colors[idx] = COLOR_BLACK;
+    t->sorted[t->sortedCount++] = attr;
+}
+
+/* Topo-sort `attrs[0..count-1]` in dependency order (Y before X if X
+ * depends on Y).  Returns true on success and fills `*outSorted`
+ * with `count` entries the caller must `free`.  Returns false on
+ * cycle, with a codegen-error comment written to `s->out` for the
+ * user to see in the generated source. */
+static bool topoSort(CCtx* s, const Node** attrs, int count,
+                     const char* contextName,
+                     const Node*** outSorted) {
+    if (count == 0) {
+        *outSorted = NULL;
+        return true;
+    }
+    TopoState t = {
+        .attrs = attrs,
+        .count = count,
+        .colors = (TopoColor*)calloc((size_t)count, sizeof(TopoColor)),
+        .sorted = (const Node**)malloc((size_t)count * sizeof(const Node*)),
+        .sortedCount = 0,
+        .cycleFound = false,
+    };
+    for (int i = 0; i < count && !t.cycleFound; i++) {
+        if (t.colors[i] == COLOR_WHITE) {
+            topoVisitNode(&t, attrs[i]);
+        }
+    }
+    free(t.colors);
+    if (t.cycleFound) {
+        fprintf(s->out,
+                "/* codegen error: cyclic init dependency in %s — skipped */\n",
+                contextName);
+        free(t.sorted);
+        *outSorted = NULL;
+        return false;
+    }
+    *outSorted = t.sorted;
+    return true;
+}
+
+/* ---- T_init emission -------------------------------------------- */
+
+/* Does this part def need a T_init function?  Yes if any of its
+ * attribute members has a defaultValue, or if any of its nested
+ * struct usage members has its own T_init (chained init).          */
+static bool defNeedsInit(const CCtx* s, const Node* def) {
+    if (!def || def->kind != NODE_DEFINITION) return false;
+    if (!isEmittable(s, def)) return false;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m) continue;
+        if (m->kind == NODE_ATTRIBUTE && m->as.attribute.defaultValue) {
+            return true;
+        }
+        if (m->kind == NODE_USAGE) {
+            const Node* td = resolvedTypeDef(m);
+            if (defNeedsInit(s, td)) return true;
+        }
+    }
+    return false;
+}
+
+/* Emit the prototype `void T_init(T* self);` */
+static void emitInitPrototype(CCtx* s, const Node* def) {
+    fprintf(s->out, "void %.*s_init(%.*s* self);\n",
+            def->as.scope.name.length, def->as.scope.name.start,
+            def->as.scope.name.length, def->as.scope.name.start);
+}
+
+/* Emit the body for `T_init`.  Order:
+ *   1. Chain into nested struct fields' inits (so their defaults
+ *      land before any sibling reads them).
+ *   2. Topo-sorted scalar attribute assignments.                    */
+static void emitInitBody(CCtx* s, const Node* def) {
+    fputc('\n', s->out);
+    fprintf(s->out, "void %.*s_init(%.*s* self) {\n",
+            def->as.scope.name.length, def->as.scope.name.start,
+            def->as.scope.name.length, def->as.scope.name.start);
+
+    /* Step 1: chain into nested struct fields' inits. */
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_USAGE) continue;
+        const Node* td = resolvedTypeDef(m);
+        if (!defNeedsInit(s, td)) continue;
+        long n = 0;
+        MultKind mk = usageMultiplicity(m, &n);
+        if (mk == MULT_FIXED) {
+            fprintf(s->out, "    for (long _i = 0; _i < %ld; _i++) {\n", n);
+            fprintf(s->out, "        %.*s_init(&self->%.*s[_i]);\n",
+                    td->as.scope.name.length, td->as.scope.name.start,
+                    m->as.usage.name.length,  m->as.usage.name.start);
+            fprintf(s->out, "    }\n");
+        } else {
+            fprintf(s->out, "    %.*s_init(&self->%.*s);\n",
+                    td->as.scope.name.length, td->as.scope.name.start,
+                    m->as.usage.name.length,  m->as.usage.name.start);
+        }
+    }
+
+    /* Step 2: topo-sort scalar attribute assignments. */
+    int attrCount = 0;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (m && m->kind == NODE_ATTRIBUTE && m->as.attribute.defaultValue) {
+            attrCount++;
+        }
+    }
+    if (attrCount > 0) {
+        const Node** attrs = (const Node**)malloc((size_t)attrCount * sizeof(const Node*));
+        int j = 0;
+        for (int i = 0; i < def->as.scope.memberCount; i++) {
+            const Node* m = def->as.scope.members[i];
+            if (m && m->kind == NODE_ATTRIBUTE && m->as.attribute.defaultValue) {
+                attrs[j++] = m;
+            }
+        }
+        const Node** sorted = NULL;
+        char ctx[128];
+        snprintf(ctx, sizeof ctx, "%.*s_init",
+                 def->as.scope.name.length, def->as.scope.name.start);
+        if (topoSort(s, attrs, attrCount, ctx, &sorted)) {
+            s->currentInitDef = def;
+            for (int i = 0; i < attrCount; i++) {
+                const Node* m = sorted[i];
+                fprintf(s->out, "    self->%.*s = ",
+                        m->as.attribute.name.length, m->as.attribute.name.start);
+                emitExpr(s, m->as.attribute.defaultValue);
+                fputs(";\n", s->out);
+            }
+            s->currentInitDef = NULL;
+            free(sorted);
+        }
+        free(attrs);
+    }
+
+    fputs("}\n", s->out);
+}
+
+/* ---- __sml2c_init emission --------------------------------------- *
+ *
+ * Top-level non-const attributes (those whose default contains a
+ * call, can't lower to `static const`) are stored in a registry
+ * during the visitor walk.  After the walk, this function emits a
+ * `void __sml2c_init(void)` whose body assigns each one in
+ * topo-sorted order.                                                */
+static void emitProgramInit(CCtx* s) {
+    if (s->topLevelL2.count == 0) return;
+
+    fputs("\nvoid __sml2c_init(void) {\n", s->out);
+
+    const Node** attrs = (const Node**)s->topLevelL2.items;
+    const Node** sorted = NULL;
+    if (topoSort(s, attrs, s->topLevelL2.count, "__sml2c_init", &sorted)) {
+        for (int i = 0; i < s->topLevelL2.count; i++) {
+            const Node* m = sorted[i];
+            fprintf(s->out, "    %.*s = ",
+                    m->as.attribute.name.length, m->as.attribute.name.start);
+            emitExpr(s, m->as.attribute.defaultValue);
+            fputs(";\n", s->out);
+        }
+        free(sorted);
+    }
+
+    fputs("}\n", s->out);
 }
 
 /* ---- definitions: pre-flight check --------------------------- */
@@ -668,16 +949,25 @@ static void onAttribute(AstWalkCtx* ctx, Node* n) {
                 n->as.attribute.name.length, n->as.attribute.name.start);
         return;
     }
-    /* C requires `static const` initializers to be constant
-     * expressions.  Function calls aren't, so a default like
-     * `Power(400, 6000)` can't lower to a static const.  v0.23 will
-     * lift these into a runtime `__sml2c_init` function; for v0.22
-     * we skip cleanly so cc -fsyntax-only still passes. */
+    /* L2: top-level attribute whose default value contains a function
+     * call.  C doesn't allow function calls in `static const`
+     * initializers, so we hoist these to non-const globals and queue
+     * them for assignment in the generated `__sml2c_init`.  The
+     * declaration is emitted here in source order; the assignment
+     * order is decided by topoSort after the visitor walk so that an
+     * L2 attribute that depends on another L2 sibling reads it after
+     * it's been initialized.                                          */
     if (n->as.attribute.defaultValue
      && exprContainsCall(n->as.attribute.defaultValue)) {
-        fprintf(s->out,
-                "/* skipped: %.*s (non-const initializer — needs v0.23 init function) */\n",
+        fprintf(s->out, "%s %.*s;\n", cty,
                 n->as.attribute.name.length, n->as.attribute.name.start);
+        if (s->topLevelL2.count == s->topLevelL2.capacity) {
+            int cap = s->topLevelL2.capacity ? s->topLevelL2.capacity * 2 : 8;
+            s->topLevelL2.items = realloc(s->topLevelL2.items,
+                                          (size_t)cap * sizeof(const Node*));
+            s->topLevelL2.capacity = cap;
+        }
+        s->topLevelL2.items[s->topLevelL2.count++] = n;
         return;
     }
 
@@ -694,10 +984,12 @@ static void onAttribute(AstWalkCtx* ctx, Node* n) {
 
 void emitC(FILE* out, const Node* program) {
     CCtx s = {
-        .out          = out,
-        .insideAnyDef = false,
-        .emittable    = { NULL, 0, 0 },
-        .calcs        = { NULL, 0, 0 },
+        .out             = out,
+        .insideAnyDef    = false,
+        .emittable       = { NULL, 0, 0 },
+        .calcs           = { NULL, 0, 0 },
+        .topLevelL2      = { NULL, 0, 0 },
+        .currentInitDef  = NULL,
     };
     /* `astWalkProgram` is non-const on its first arg, but we never
      * mutate during emission.  Cast away const for both passes.    */
@@ -711,18 +1003,12 @@ void emitC(FILE* out, const Node* program) {
      * are already in the list before it.                            */
     collectEmittable(&s, prog);
 
-    /* Pass 1.5 — register every emittable calc def.  Calcs depend
-     * only on primitive types and (transitively) on other calcs,
-     * which are forward-declared together below; no fixed-point
-     * iteration needed.                                              */
+    /* Pass 1.5 — register every emittable calc def. */
     collectCalcDefs(&s, prog);
 
-    /* Header preamble — emitted directly so the registry pass can
-     * follow it without going through onProgramEnter twice.  The
-     * runtime header brings in the kernel + ISQ typedefs (Real,
-     * Integer, Boolean, String, MassValue, …) plus stdbool/stdint
-     * transitively, so the generated `.c` doesn't need to know
-     * about the C primitive names directly.                        */
+    /* Header preamble.  The runtime header brings in the kernel + ISQ
+     * typedefs (Real, Integer, Boolean, String, MassValue, …) plus
+     * stdbool/stdint transitively.                                  */
     fputs("/* Generated by sml2c — do not edit by hand. */\n", out);
     fputs("#include \"sml2c-runtime.h\"\n\n", out);
 
@@ -731,34 +1017,52 @@ void emitC(FILE* out, const Node* program) {
     static const AstVisitor banner = { .onPackageEnter = onPackageBanner };
     astWalkProgram(prog, &banner, &s);
 
-    /* Pass 2a — calc def prototypes (forward declarations).  Comes
-     * before struct emission so a struct field whose type is named
-     * after a calc def doesn't shadow the function name at file
-     * scope (a remote possibility in pathological models, but cheap
-     * to defuse).                                                    */
+    /* Pass 2a — calc def prototypes (forward declarations). */
     if (s.calcs.count > 0) fputc('\n', out);
     for (int i = 0; i < s.calcs.count; i++) {
         emitCalcDefPrototype(&s, s.calcs.items[i]);
     }
 
     /* Pass 2b — emit each emittable struct definition in registry
-     * order (which is dependency order).  Each emission is
-     * self-contained because all referenced types have already been
-     * emitted.                                                       */
+     * order (dependency order).                                    */
     for (int i = 0; i < s.emittable.count; i++) {
         emitDefinitionFromRegistry(&s, s.emittable.items[i]);
     }
 
-    /* Pass 2c — calc def bodies.  After the structs because a calc
-     * def could (in a future revision) take or return a struct type
-     * by value, and the typedef must precede such a body.            */
+    /* Pass 2c — T_init prototypes for every struct that needs one.
+     * Forward-declared together so a T_init that calls a sibling
+     * T_init (e.g. nested struct with its own defaults) compiles. */
+    bool anyInit = false;
+    for (int i = 0; i < s.emittable.count; i++) {
+        if (defNeedsInit(&s, s.emittable.items[i])) anyInit = true;
+    }
+    if (anyInit) fputc('\n', out);
+    for (int i = 0; i < s.emittable.count; i++) {
+        if (defNeedsInit(&s, s.emittable.items[i])) {
+            emitInitPrototype(&s, s.emittable.items[i]);
+        }
+    }
+    if (s.topLevelL2.count > 0 || anyInit) {
+        /* Forward-declare __sml2c_init so user code can call it
+         * before its definition appears (which is at end of file). */
+    }
+
+    /* Pass 2d — calc def bodies. */
     for (int i = 0; i < s.calcs.count; i++) {
         emitCalcDefBody(&s, s.calcs.items[i]);
     }
 
+    /* Pass 2e — T_init bodies. */
+    for (int i = 0; i < s.emittable.count; i++) {
+        if (defNeedsInit(&s, s.emittable.items[i])) {
+            emitInitBody(&s, s.emittable.items[i]);
+        }
+    }
+
     /* Pass 3 — visitor walk for the bits the registry doesn't
-     * handle: package comments, top-level static const attributes,
-     * and skip comments for non-emittable definitions.             */
+     * handle: package comments, top-level static const attributes
+     * (L1) and non-const global declarations (L2), and skip comments
+     * for non-emittable definitions.                                */
     static const AstVisitor v = {
         .onPackageEnter    = onPackageEnter,
         .onDefinitionEnter = onDefinitionEnter,
@@ -768,6 +1072,11 @@ void emitC(FILE* out, const Node* program) {
     };
     astWalkProgram(prog, &v, &s);
 
+    /* Pass 4 — `__sml2c_init` body, if any L2 attributes were
+     * collected during the visitor walk. */
+    emitProgramInit(&s);
+
     free(s.emittable.items);
     free(s.calcs.items);
+    free(s.topLevelL2.items);
 }

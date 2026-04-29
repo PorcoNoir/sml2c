@@ -758,4 +758,22 @@ source preserves SysML intent (`Real mass`, not `double mass`),
 and the seam is in place for future dimensional-safety lowering
 (tagged structs) without touching the codegen.
 
+#### 2026-04-29 — v0.23: T_init + __sml2c_init shipped
+
+Per part def with at least one defaulted attribute: emit
+`void T_init(T* self)` that assigns each defaulted field, with
+sibling references rewritten to `self->name`, in topological order
+by dependency.  Per top-level attribute whose default contains a
+function call: hoist to a non-const global and queue the
+assignment for `__sml2c_init`, again topologically sorted.
+
+Cycle handling: detected during the DFS, emits a codegen-error
+comment in place of the affected init body rather than silently
+producing wrong code.
+
+Nested struct field init: outer T_init calls inner `T_init`
+before any sibling assignments.  Cross-level dependencies
+(`attribute total = engine.power`) deferred — the member-access
+lowering is still future work.
+
 (empty — to be populated as turns ship)

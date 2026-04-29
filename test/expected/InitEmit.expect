@@ -1,0 +1,6 @@
+referenceSquare = 49
+Engine.mass = 200
+Engine.torque = 350
+Engine.redline = 7000
+Engine.massPlusTorque = 550
+Engine.headroom = 6450

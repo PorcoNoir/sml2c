@@ -9,6 +9,117 @@ the working tree at the time of release.
 
 ---
 
+## v0.23 — Init functions (T_init + __sml2c_init)
+
+Second step of the executable-target pivot.  Defaults declared in
+SysML now actually take effect — every part def with at least one
+defaulted attribute gets a generated `T_init(T*)` function, and
+top-level non-const attributes get hoisted into a generated
+`__sml2c_init(void)`.
+
+```sysml
+part def Engine {
+    attribute mass    : Real = 200.0;
+    attribute torque  : Real = 350.0;
+    attribute redline : Real = 7000.0;
+    attribute massPlusTorque : Real = mass + torque;
+    attribute headroom       : Real = redline - massPlusTorque;
+}
+
+attribute referenceSquare : Real = Square(7.0);     /* L2 — non-const */
+```
+
+emits
+
+```c
+void Engine_init(Engine* self) {
+    self->mass = 200.0;
+    self->torque = 350.0;
+    self->redline = 7000.0;
+    self->massPlusTorque = (self->mass + self->torque);
+    self->headroom = (self->redline - self->massPlusTorque);
+}
+
+Real referenceSquare;     /* not static-const — initialized in __sml2c_init */
+
+void __sml2c_init(void) {
+    referenceSquare = Square(7.0);
+}
+```
+
+**Bare-name rewriter.**  Inside `T_init`, any single-segment qname
+that resolves to a sibling attribute of `T` rewrites to
+`self->name`.  Scoped: only fires while `currentInitDef` is set in
+the codegen context (i.e. during `T_init` body emission).  Calc-def
+bodies don't get the rewrite — their parameters are local C
+identifiers, not struct fields.
+
+**Topological sort.**  Both `T_init` and `__sml2c_init` order their
+assignments by dependency rather than source order.  An attribute X
+depends on Y iff X's default expression contains a single-segment
+qname resolving to Y.  DFS-with-three-colors detects cycles and
+emits a codegen-error comment in place of the affected init body
+rather than silently producing wrong code.
+
+```
+Engine_init in source order would assign massPlusTorque before
+headroom (which depends on it), but if the user wrote them in the
+opposite order, source-order would silently read uninitialized
+memory.  Topo sort makes the order safe regardless of how the
+user listed them.
+```
+
+**Cycle detection.**  When `attribute a = b + 1; attribute b = a - 1;`
+appears in a part def, the generated init function comes out as
+
+```c
+void Bad_init(Bad* self) {
+    /* codegen error: cyclic init dependency in Bad_init — skipped */
+}
+```
+
+The C compiler accepts the empty body; the user sees the cycle
+explicitly rather than getting a confusing runtime read of
+uninitialized memory.
+
+**Nested struct initialization.**  When a part def has a nested
+part-def field whose type itself needs `T_init`, the outer init
+chains:
+
+```sysml
+part def Vehicle {
+    part wheels : Wheel [4];   /* Wheel has its own T_init */
+}
+```
+
+→
+
+```c
+void Vehicle_init(Vehicle* self) {
+    for (long _i = 0; _i < 4; _i++) {
+        Wheel_init(&self->wheels[_i]);
+    }
+    /* … any Vehicle-level scalar defaults … */
+}
+```
+
+The chain runs first (so nested values are settled before any
+sibling reference reads from them).  Cross-level dependencies
+(`attribute total = engine.power`) aren't supported in v0.23 — the
+member-access lowering is still future work.
+
+**Verification.**  All sweep gates green: 73 strict, 46 graphsml,
+46 test-c, **2 test-c-run** (CalcEmit + new InitEmit), 132 verify-
+tokens.  PTC parser=0 / default=15.
+
+**Files touched:** `src/codegen_c.c` (~+250 lines: topo sort,
+T_init emission, __sml2c_init emission, isMemberOf helper, self->
+rewriter in emitQNameC, L2 hoisting in onAttribute);
+`CHANGELOG.md`, `README.md`; new `test/InitEmit.sysml`,
+`test/InitEmit.driver.c`, `test/expected/InitEmit.expect`.
+
+---
+
 ## v0.22.1 — Runtime header for kernel + ISQ types
 
 Refinement to v0.22 prompted by user clarification.  Until now,
