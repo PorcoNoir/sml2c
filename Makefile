@@ -252,7 +252,7 @@ test-c-run: $(BIN)
 # PTC_BASELINE to update the tracked count after a deliberate
 # improvement / regression.
 
-PTC_FILE     ?= /mnt/user-data/uploads/ptc-25-04-31.sysml
+PTC_FILE     ?= ./docs/ptc-25-04-31.sysml
 PTC_BASELINE ?= 15
 
 .PHONY: test-ptc
