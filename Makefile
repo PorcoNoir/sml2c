@@ -5,6 +5,10 @@
 #   make tokens      build and dump the token stream of the built-in sample
 #   make test        parse every .sysml in test/ and print the AST
 #   make test-all    strict pass/fail run, including test/bad/ negatives
+#   make test-c      cc -fsyntax-only on each --emit-c output
+#   make test-graphsml  Python adapter smoke run on each --emit-json output
+#   make test-ptc    PTC reference-file gates (parser-strict + baseline)
+#   make sweep       all of the above + verify-tokens.sh, single report
 #   make test-one    parse a single .sysml file (default: test/Feature.sysml)
 #                    override with `make test-one FILE=path/to/file.sysml`
 #   make clean       remove obj/, bin/, build/
@@ -168,3 +172,92 @@ test-graphsml: $(BIN)
 	done; \
 	echo "  graphsml adapter: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ]
+
+# ---- C codegen smoke test --------------------------------------------
+#
+# Pipe each positive .sysml test through `--emit-c` into `cc
+# -fsyntax-only`.  Files with bad SysML are skipped (test/bad/ is
+# excluded already because TEST_FILES is wildcard test/*.sysml).
+# A failure here means we generated invalid C, which is a regression
+# worth catching independently of the SysML test suite.
+
+.PHONY: test-c
+test-c: $(BIN)
+	@pass=0; fail=0; \
+	for f in $(TEST_FILES); do \
+	    base=$$(basename $$f); \
+	    out=$$(./$(BIN) --emit-c $$f 2>/dev/null | $(CC) -std=c11 -fsyntax-only -x c - 2>&1); \
+	    if [ $$? -eq 0 ]; then \
+	        pass=$$((pass+1)); \
+	    else \
+	        echo "  FAIL  $$base"; \
+	        echo "$$out" | sed 's/^/        /'; \
+	        fail=$$((fail+1)); \
+	    fi; \
+	done; \
+	echo "  C codegen: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
+
+# ---- PTC reference-file gate ----------------------------------------
+#
+# PTC is a 1580-line industry-standard SysML file from the SysML
+# Practitioner Toolkit Companion.  We track two numbers:
+#
+#   parser-only errors   — strict gate, must be 0
+#   default-mode errors  — informational, tracked against PTC_BASELINE
+#                          so an unexpected jump shows up as a FAIL
+#                          (regression catch) without forcing every
+#                          turn to be net-zero on PTC errors
+#
+# Override PTC_FILE to point at a different reference, or
+# PTC_BASELINE to update the tracked count after a deliberate
+# improvement / regression.
+
+PTC_FILE     ?= /mnt/user-data/uploads/ptc-25-04-31.sysml
+PTC_BASELINE ?= 15
+
+.PHONY: test-ptc
+test-ptc: $(BIN)
+	@if [ ! -f "$(PTC_FILE)" ]; then \
+	    echo "  PTC: skipped (file not found: $(PTC_FILE))"; \
+	    exit 0; \
+	fi; \
+	parser_errs=$$(./$(BIN) --no-resolve --no-typecheck --no-redefcheck \
+	                       --no-connectcheck --no-refcheck \
+	                       "$(PTC_FILE)" 2>&1 | grep -c "Error:"); \
+	default_errs=$$(./$(BIN) "$(PTC_FILE)" 2>&1 | grep -c "Error:"); \
+	if [ "$$parser_errs" -ne 0 ]; then \
+	    echo "  FAIL  PTC parser-only: $$parser_errs errors (expected 0)"; \
+	    exit 1; \
+	fi; \
+	if [ "$$default_errs" -gt "$(PTC_BASELINE)" ]; then \
+	    echo "  FAIL  PTC default-mode: $$default_errs errors (baseline $(PTC_BASELINE))"; \
+	    echo "        regression — fix or update PTC_BASELINE"; \
+	    exit 1; \
+	fi; \
+	echo "  PTC: parser=$$parser_errs, default=$$default_errs (baseline $(PTC_BASELINE))"
+
+# ---- Aggregate sweep ------------------------------------------------
+#
+# Single command for the full validation matrix.  Runs each gate,
+# prints one summary line per gate, and exits non-zero on any fail.
+# Order is cheapest-first so a regression surfaces quickly.
+
+.PHONY: sweep
+sweep: $(BIN)
+	@status=0; \
+	echo "==> verify-tokens"; \
+	./verify-tokens.sh         || status=1; \
+	echo "==> test-all (strict)"; \
+	$(MAKE) -s test-all        || status=1; \
+	echo "==> test-c (cc -fsyntax-only)"; \
+	$(MAKE) -s test-c          || status=1; \
+	echo "==> test-graphsml"; \
+	$(MAKE) -s test-graphsml   || status=1; \
+	echo "==> test-ptc"; \
+	$(MAKE) -s test-ptc        || status=1; \
+	echo ""; \
+	if [ $$status -eq 0 ]; then echo "sweep: all gates green"; \
+	else                        echo "sweep: FAIL"; fi; \
+	exit $$status
+

@@ -84,50 +84,30 @@ static void emitFieldInt(J* j, const char* k, long v) {
     fprintf(j->out, "\"%s\": %ld", k, v);
 }
 
+/* If `n` has an inferred type (set by the typechecker), emit a
+ * "type" field with the type definition's name.  Builtin synthetic
+ * types — Real, Integer, Boolean, String — have no source name token
+ * but do have a stable defLabel; fall back to that.  Returns true if
+ * a field was emitted so the caller can update its `first` flag.   */
+static bool emitInferredType(J* j, bool* first, const Node* n) {
+    const Node* t = n->inferredType;
+    if (!t) return false;
+    if (t->kind != NODE_DEFINITION) return false;
+    Token name = t->as.scope.name;
+    sep(j, first); emitKey(j, "type");
+    if (name.length > 0) {
+        emitJsonString(j, name.start, name.length);
+    } else {
+        /* Synthetic stdlib type with no source token. */
+        emitJsonString(j, "?builtin", 8);
+    }
+    return true;
+}
+
 /* ---- enum-to-string maps --------------------------------------- */
 
 static const char* defKindStr(DefKind k) {
-    switch (k) {
-    case DEF_PART:       return "PartDef";
-    case DEF_PORT:       return "PortDef";
-    case DEF_INTERFACE:  return "InterfaceDef";
-    case DEF_ITEM:       return "ItemDef";
-    case DEF_CONNECTION: return "ConnectionDef";
-    case DEF_FLOW:       return "FlowDef";
-    case DEF_END:        return "End";
-    case DEF_DATATYPE:   return "DataTypeDef";
-    case DEF_ENUM:       return "EnumDef";
-    case DEF_REFERENCE:  return "ReferenceUsage";
-    case DEF_CONSTRAINT: return "ConstraintDef";
-    case DEF_REQUIREMENT:return "RequirementDef";
-    case DEF_SUBJECT:    return "Subject";
-    case DEF_ACTION:     return "ActionDef";
-    case DEF_STATE:      return "StateDef";
-    case DEF_CALC:       return "CalcDef";
-    case DEF_ATTRIBUTE_DEF: return "AttributeDef";
-    case DEF_OCCURRENCE: return "OccurrenceDef";
-    case DEF_EVENT:      return "EventDef";
-    case DEF_INDIVIDUAL: return "IndividualDef";
-    case DEF_SNAPSHOT:   return "SnapshotDef";
-    case DEF_TIMESLICE:  return "TimesliceDef";
-    case DEF_ALLOCATION: return "AllocationDef";
-    case DEF_VIEW:       return "ViewDef";
-    case DEF_VIEWPOINT:  return "ViewpointDef";
-    case DEF_RENDERING:  return "RenderingDef";
-    case DEF_CONCERN:    return "ConcernDef";
-    case DEF_VARIANT:    return "VariantDef";
-    case DEF_VARIATION:  return "VariationDef";
-    case DEF_ACTOR:      return "ActorDef";
-    case DEF_USE_CASE:   return "UseCaseDef";
-    case DEF_INCLUDE:    return "IncludeDef";
-    case DEF_MESSAGE:    return "MessageDef";
-    case DEF_METADATA:   return "MetadataDef";
-    case DEF_VERIFICATION: return "VerificationDef";
-    case DEF_OBJECTIVE:  return "ObjectiveDef";
-    case DEF_SATISFY:    return "SatisfyDef";
-    case DEF_ANALYSIS:   return "AnalysisDef";
-    }
-    return "?";
+    return defKindInfo(k)->defJson;
 }
 
 static const char* assertKindStr(AssertKind a) {
@@ -280,6 +260,11 @@ static void emitQualifiedName(J* j, const Node* q) {
             emitToken(j, rn);
         }
     }
+    /* When this qname is used as a value reference (the typechecker
+     * called typeOf on it), inferredType holds the declared type of
+     * the resolved feature.  Type-position qnames are never visited
+     * by typeOf and will leave this NULL.                            */
+    emitInferredType(j, &first, q);
     j->indent--; newline(j); fputc('}', j->out);
 }
 
@@ -288,6 +273,7 @@ static void emitLiteral(J* j, const Node* n) {
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "Literal");
     sep(j, &first); emitFieldStr(j, "litKind", litKindStr(n->as.literal.litKind));
+    emitInferredType(j, &first, n);
     sep(j, &first); emitKey(j, "value");
     switch (n->as.literal.litKind) {
     case LIT_INT:
@@ -318,6 +304,7 @@ static void emitBinary(J* j, const Node* n) {
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "Binary");
     sep(j, &first); emitFieldStr(j, "op", opSym(n->as.binary.op.type));
+    emitInferredType(j, &first, n);
     sep(j, &first); emitKey(j, "left");  emitNode(j, n->as.binary.left);
     sep(j, &first); emitKey(j, "right"); emitNode(j, n->as.binary.right);
     j->indent--; newline(j); fputc('}', j->out);
@@ -328,6 +315,7 @@ static void emitUnary(J* j, const Node* n) {
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "Unary");
     sep(j, &first); emitFieldStr(j, "op", opSym(n->as.unary.op.type));
+    emitInferredType(j, &first, n);
     sep(j, &first); emitKey(j, "operand"); emitNode(j, n->as.unary.operand);
     j->indent--; newline(j); fputc('}', j->out);
 }
@@ -361,6 +349,7 @@ static void emitAttribute(J* j, const Node* n) {
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "Attribute");
     sep(j, &first); emitKey(j, "name"); emitToken(j, n->as.attribute.name);
+    sep(j, &first); emitFieldStr (j, "direction",  dirStr(n->as.attribute.direction));
     sep(j, &first); emitFieldStr(j, "visibility", visStr(n->as.attribute.visibility));
     sep(j, &first); emitFieldBool(j, "isDerived",   n->as.attribute.isDerived);
     sep(j, &first); emitFieldBool(j, "isAbstract",  n->as.attribute.isAbstract);
@@ -572,6 +561,7 @@ static void emitCall(J* j, const Node* n) {
     bool first = true;
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "Call");
+    emitInferredType(j, &first, n);
     sep(j, &first); emitKey(j, "callee");
     if (n->as.call.callee) emitNode(j, n->as.call.callee);
     else                   fputs("null", j->out);
@@ -583,6 +573,7 @@ static void emitMemberAccess(J* j, const Node* n) {
     bool first = true;
     fputc('{', j->out); j->indent++; newline(j);
     sep(j, &first); emitFieldStr(j, "kind", "MemberAccess");
+    emitInferredType(j, &first, n);
     sep(j, &first); emitKey(j, "target");
     if (n->as.memberAccess.target) emitNode(j, n->as.memberAccess.target);
     else                           fputs("null", j->out);

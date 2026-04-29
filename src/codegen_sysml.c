@@ -255,47 +255,7 @@ static void emitExpression(S* s, const Node* expr) {
 /* Map a DefKind to the source keyword used to introduce it.  Used
  * by both definition and usage emitters.                          */
 static const char* defKeyword(DefKind k) {
-    switch (k) {
-    case DEF_PART:       return "part";
-    case DEF_PORT:       return "port";
-    case DEF_INTERFACE:  return "interface";
-    case DEF_ITEM:       return "item";
-    case DEF_CONNECTION: return "connection";
-    case DEF_FLOW:       return "flow";
-    case DEF_END:        return "end";
-    case DEF_ENUM:       return "enum";
-    case DEF_DATATYPE:   return "datatype";    /* no source form, sentinel */
-    case DEF_REFERENCE:  return "ref";          /* bare-ref usage */
-    case DEF_CONSTRAINT: return "constraint";
-    case DEF_REQUIREMENT:return "requirement";
-    case DEF_SUBJECT:    return "subject";
-    case DEF_ACTION:     return "action";
-    case DEF_STATE:      return "state";
-    case DEF_CALC:       return "calc";
-    case DEF_ATTRIBUTE_DEF: return "attribute";
-    case DEF_OCCURRENCE: return "occurrence";
-    case DEF_EVENT:      return "event occurrence";
-    case DEF_INDIVIDUAL: return "individual";
-    case DEF_SNAPSHOT:   return "snapshot";
-    case DEF_TIMESLICE:  return "timeslice";
-    case DEF_ALLOCATION: return "allocation";
-    case DEF_VIEW:       return "view";
-    case DEF_VIEWPOINT:  return "viewpoint";
-    case DEF_RENDERING:  return "rendering";
-    case DEF_CONCERN:    return "concern";
-    case DEF_VARIANT:    return "variant";
-    case DEF_VARIATION:  return "variation";
-    case DEF_ACTOR:      return "actor";
-    case DEF_USE_CASE:   return "use case";
-    case DEF_INCLUDE:    return "include";
-    case DEF_MESSAGE:    return "message";
-    case DEF_METADATA:   return "metadata";
-    case DEF_VERIFICATION: return "verification";
-    case DEF_OBJECTIVE:  return "objective";
-    case DEF_SATISFY:    return "satisfy";
-    case DEF_ANALYSIS:   return "analysis";
-    }
-    return "?";
+    return defKindKeyword(k);
 }
 
 static void emitDefinition(S* s, const Node* n) {
@@ -402,6 +362,11 @@ static void emitUsage(S* s, const Node* n) {
     if (n->as.usage.defKind == DEF_SATISFY) {
         emitIndent(s);
         fputs("satisfy ", s->out);
+        if (n->as.usage.name.length > 0) {
+            fputs("requirement ", s->out);
+            emitToken(s, n->as.usage.name);
+            fputs(" : ", s->out);
+        }
         if (n->as.usage.types.count >= 1) {
             emitQualifiedName(s, n->as.usage.types.items[0]);
         }
@@ -409,6 +374,25 @@ static void emitUsage(S* s, const Node* n) {
             fputs(" by ", s->out);
             emitQualifiedName(s, n->as.usage.ends.items[0]);
         }
+        fputs(";\n", s->out);
+        return;
+    }
+
+    /* Bare-reference assertion: `assert <ref>;`, `require <ref>;`.
+     * The parser builds a DEF_REQUIREMENT usage with no name, no
+     * type, and a single specializes ref.  Emit the short form so
+     * round-trip stays a fixed point — the long form
+     * `assert requirement :> X;` doesn't reparse.                    */
+    if (n->as.usage.assertKind != ASSERT_NONE
+        && n->as.usage.name.length == 0
+        && n->as.usage.types.count == 0
+        && n->as.usage.specializes.count == 1
+        && n->as.usage.redefines.count == 0
+        && n->as.usage.ends.count == 0
+        && n->as.usage.body == NULL) {
+        emitIndent(s);
+        emitAssertKind(s, n->as.usage.assertKind);
+        emitQualifiedName(s, n->as.usage.specializes.items[0]);
         fputs(";\n", s->out);
         return;
     }
@@ -484,6 +468,7 @@ static void emitUsage(S* s, const Node* n) {
 static void emitAttribute(S* s, const Node* n) {
     emitIndent(s);
     emitVisibility(s, n->as.attribute.visibility);
+    emitDirection (s, n->as.attribute.direction);
     /* Same rule as emitUsage: emit `ref` only when source had it
      * explicitly.  The referentialchecker forces isReference=true on
      * every attribute usage (rule #2), but that's a downstream marker

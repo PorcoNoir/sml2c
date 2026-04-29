@@ -34,6 +34,15 @@ typedef struct Scope {
      * Stored as a NodeList so we can reuse astListAppend without a
      * bespoke list type.                                               */
     NodeList      wildcardImports;
+    /* If the scope belongs to a usage/definition body whose declared
+     * type or supertype carries inherited features, this points at
+     * that type/supertype's NODE_DEFINITION (or NODE_USAGE).  Name
+     * lookup falls back to lookupMember on this node when the local
+     * symbol table doesn't have a hit, so a feature inherited from
+     * the type — for instance an `include use case foo;` declared in
+     * UC, when the current scope belongs to `t : UC` — is reachable
+     * by its bare name from inside the body.                         */
+    const Node*   inheritedFrom;
     const char*   what;      /* "program", "package", "definition", … */
 } Scope;
 
@@ -49,15 +58,30 @@ void duplicateNameError(int line, Token name, int prevLine);
 
 /* ------------------------------------------------- scope primitives */
 
-bool        tokensEqual(Token a, Token b);
 Symbol*     lookupLocal(const Scope* scope, Token name);
 const Node* lookupChain(const Scope* scope, Token name);
 void        declareName(Scope* scope, Token name, const Node* decl);
+/* Variant of declareName that's silent on conflict: if `name` is
+ * already declared in `scope`, leave the existing binding alone and
+ * return false.  Used for soft declarations (re-exports, redefinition
+ * aliases) where a real explicit decl always wins. */
+bool        declareNameIfFree(Scope* scope, Token name, const Node* decl);
 void        freeScope(Scope* scope);
 
 /* ------------------------------------------------- name extraction */
 
-Token nodeName(const Node* n);
+/* tokensEqual and nodeName live in ast.h — they're not specific to
+ * the resolver pass.  Re-declared here only as a courtesy reminder
+ * that the resolver's scope primitives use them.                    */
+
+/* Last identifier of a qualified-name node, or an empty token if the
+ * node isn't a qname or has no parts. */
+Token qnameLastSegment(const Node* qname);
+
+/* First item of `list` if it's a qname with a resolved decl, else
+ * NULL.  Used to pick a usage's primary inheritance source from
+ * its types[] / specializes[] list. */
+const Node* firstResolvedQname(const NodeList* list);
 
 /* ------------------------------------------------- member-of-type lookup */
 

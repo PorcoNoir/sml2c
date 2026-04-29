@@ -5,6 +5,7 @@
  *   ./sysmlc --tokens [file]          just dump the token stream
  *   ./sysmlc --emit-json [file]       emit AST as JSON instead of pretty-printed tree
  *   ./sysmlc --emit-sysml [file]      emit canonical SysML (round-trip)
+ *   ./sysmlc --emit-c [file]          emit C header (typed-AST first slice)
  *   ./sysmlc --no-resolve [file]      skip resolver and later passes
  *   ./sysmlc --no-typecheck [file]    skip typechecker and later passes
  *   ./sysmlc --no-redefcheck [file]   skip redefinition checker
@@ -23,6 +24,7 @@
 #include "referentialchecker.h"
 #include "codegen_json.h"
 #include "codegen_sysml.h"
+#include "codegen_c.h"
 
 static const char* SAMPLE =
     "package MBSEPodcast {\n"
@@ -71,6 +73,7 @@ int main(int argc, char** argv) {
     bool tokensOnly = false;
     bool emitJsonMode = false;
     bool emitSysmlMode = false;
+    bool emitCMode = false;
     bool skipResolve = false;
     bool skipTypecheck = false;
     bool skipRedefcheck = false;
@@ -81,6 +84,7 @@ int main(int argc, char** argv) {
         if      (strcmp(argv[i], "--tokens")          == 0) tokensOnly       = true;
         else if (strcmp(argv[i], "--emit-json")       == 0) emitJsonMode     = true;
         else if (strcmp(argv[i], "--emit-sysml")      == 0) emitSysmlMode    = true;
+        else if (strcmp(argv[i], "--emit-c")          == 0) emitCMode        = true;
         else if (strcmp(argv[i], "--no-resolve")      == 0) skipResolve      = true;
         else if (strcmp(argv[i], "--no-typecheck")    == 0) skipTypecheck    = true;
         else if (strcmp(argv[i], "--no-redefcheck")   == 0) skipRedefcheck   = true;
@@ -117,6 +121,7 @@ int main(int argc, char** argv) {
 
     if      (emitSysmlMode) emitSysml(stdout, root);
     else if (emitJsonMode)  emitJson(stdout, root);
+    else if (emitCMode)     emitC(stdout, root);
     else                    astPrint(root);
 
     free(allocated);

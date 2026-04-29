@@ -23,6 +23,7 @@
 #include "redefchecker.h"
 #include "resolver.h"      /* for lookupMember */
 #include "typechecker.h"   /* for specializesType */
+#include "ast_walk.h"
 
 /* ---- module-level state ---------------------------------------- */
 
@@ -36,25 +37,6 @@ static void redefError(int line, const char* fmt, ...) {
     va_end(ap);
     fprintf(stderr, "\n");
     errorCount++;
-}
-
-/* ---- small AST helpers ----------------------------------------- */
-
-static bool tokensEqual(Token a, Token b) {
-    if (a.length != b.length) return false;
-    return memcmp(a.start, b.start, (size_t)a.length) == 0;
-}
-
-static Token nodeName(const Node* n) {
-    static const Token empty = {0};
-    if (!n) return empty;
-    switch (n->kind) {
-    case NODE_PACKAGE:
-    case NODE_DEFINITION: return n->as.scope.name;
-    case NODE_USAGE:      return n->as.usage.name;
-    case NODE_ATTRIBUTE:  return n->as.attribute.name;
-    default:              return empty;
-    }
 }
 
 /* ---- supertype search ------------------------------------------ */
@@ -280,44 +262,20 @@ static void checkAttributeRedefs(Node* attr, const Node* owner) {
 
 /* ---- whole-program walker -------------------------------------- */
 
-static void walk(Node* n, const Node* enclosing) {
-    if (!n) return;
-    switch (n->kind) {
-    case NODE_PROGRAM:
-    case NODE_PACKAGE:
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i], NULL);
-        }
-        break;
-
-    case NODE_DEFINITION:
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i], n);
-        }
-        break;
-
-    case NODE_USAGE:
-        for (int i = 0; i < n->as.usage.memberCount; i++) {
-            walk(n->as.usage.members[i], n);
-        }
-        break;
-
-    case NODE_ATTRIBUTE:
-        if (enclosing && n->as.attribute.redefines.count > 0) {
-            checkAttributeRedefs(n, enclosing);
-        }
-        break;
-
-    default:
-        break;
+static void onAttribute(AstWalkCtx* ctx, Node* n) {
+    /* `enclosing` is the nearest DEF or USAGE ancestor; for top-level
+     * attributes (e.g. attributes declared directly inside a package)
+     * there is no enclosing classifier and redefinition rules don't
+     * apply.                                                          */
+    if (ctx->enclosing && n->as.attribute.redefines.count > 0) {
+        checkAttributeRedefs(n, ctx->enclosing);
     }
 }
 
-/* ---- public entry ---------------------------------------------- */
-
 bool checkRedefinitions(Node* program) {
     errorCount = 0;
-    walk(program, NULL);
+    static const AstVisitor v = { .onAttribute = onAttribute };
+    astWalkProgram(program, &v, NULL);
     if (errorCount > 0) {
         fprintf(stderr, "Redefinition checking failed with %d error%s.\n",
                 errorCount, errorCount == 1 ? "" : "s");

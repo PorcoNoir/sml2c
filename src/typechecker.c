@@ -23,6 +23,7 @@
 #include <stdarg.h>
 
 #include "typechecker.h"
+#include "ast_walk.h"
 #include "builtin.h"
 
 /* ---- module state ---------------------------------------------- */
@@ -257,15 +258,82 @@ static const Node* unaryType(const Node* expr) {
     }
 }
 
+/* The type of a CALL expression is the return type of the resolved
+ * calc def.  Walk the callee to its resolution target; if it's a
+ * calc def, scan its members for the NODE_RETURN entry (parser
+ * guarantees at most one) and return that return's declared type.
+ * Anything else returns NULL — the surrounding check will flag a
+ * misuse if it matters.                                             */
+static const Node* callType(const Node* expr) {
+    const Node* callee = expr->as.call.callee;
+    if (!callee || callee->kind != NODE_QUALIFIED_NAME) return NULL;
+    const Node* def = callee->as.qualifiedName.resolved;
+    if (!def || def->kind != NODE_DEFINITION) return NULL;
+    if (def->as.scope.defKind != DEF_CALC) return NULL;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_RETURN) continue;
+        if (m->as.ret.types.count == 0) return NULL;
+        const Node* tref = m->as.ret.types.items[0];
+        if (!tref || tref->kind != NODE_QUALIFIED_NAME) return NULL;
+        return tref->as.qualifiedName.resolved;
+    }
+    return NULL;
+}
+
+/* The type of a MEMBER_ACCESS `target.member` is the declared type of
+ * `member` in the type of `target`.  Resolution-time link:
+ * memberAccess.target.inferredType (filled by recursive typeOf) is the
+ * containing definition; we then look up `member` among its direct
+ * members.  No inheritance walk yet — when redefchecker's resolver
+ * lookup gets richer that machinery will be reused.                  */
+static const Node* memberAccessType(const Node* expr) {
+    const Node* targetType = typeOf(expr->as.memberAccess.target);
+    if (!targetType || targetType->kind != NODE_DEFINITION) return NULL;
+    Token want = expr->as.memberAccess.member;
+    for (int i = 0; i < targetType->as.scope.memberCount; i++) {
+        const Node* m = targetType->as.scope.members[i];
+        if (!m) continue;
+        Token mname;
+        const NodeList* mtypes = NULL;
+        if (m->kind == NODE_ATTRIBUTE) {
+            mname  = m->as.attribute.name;
+            mtypes = &m->as.attribute.types;
+        } else if (m->kind == NODE_USAGE) {
+            mname  = m->as.usage.name;
+            mtypes = &m->as.usage.types;
+        } else {
+            continue;
+        }
+        if (mname.length != want.length) continue;
+        if (memcmp(mname.start, want.start, want.length) != 0) continue;
+        if (!mtypes || mtypes->count == 0) return NULL;
+        const Node* tref = mtypes->items[0];
+        if (!tref || tref->kind != NODE_QUALIFIED_NAME) return NULL;
+        return tref->as.qualifiedName.resolved;
+    }
+    return NULL;
+}
+
 static const Node* typeOf(const Node* expr) {
     if (!expr) return NULL;
+    if (expr->inferredType) return expr->inferredType;
+    const Node* t = NULL;
     switch (expr->kind) {
-    case NODE_LITERAL:        return literalType(expr);
-    case NODE_QUALIFIED_NAME: return identifierType(expr);
-    case NODE_BINARY:         return binaryType(expr);
-    case NODE_UNARY:          return unaryType(expr);
-    default:                  return NULL;
+    case NODE_LITERAL:        t = literalType(expr);        break;
+    case NODE_QUALIFIED_NAME: t = identifierType(expr);     break;
+    case NODE_BINARY:         t = binaryType(expr);         break;
+    case NODE_UNARY:          t = unaryType(expr);          break;
+    case NODE_CALL:           t = callType(expr);           break;
+    case NODE_MEMBER_ACCESS:  t = memberAccessType(expr);   break;
+    default:                  t = NULL;                     break;
     }
+    /* Cache the result on the node itself so subsequent passes (and
+     * --emit-json output) can read it without recomputing.  We cast
+     * away const because the caching is incidental to the read; the
+     * AST shape doesn't change.                                       */
+    ((Node*)expr)->inferredType = t;
+    return t;
 }
 
 /* ---- constraint / requirement body checks ---------------------- */
@@ -412,58 +480,53 @@ static void checkSuccessionRef(const Node* qname, int line) {
 
 /* ---- whole-program walker -------------------------------------- */
 
-static void walk(const Node* n, bool insideEnumDef) {
-    if (!n) return;
-    switch (n->kind) {
-    case NODE_PROGRAM:
-    case NODE_PACKAGE:
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i], false);
-        }
-        break;
-    case NODE_DEFINITION: {
-        bool childContext = (n->as.scope.defKind == DEF_ENUM);
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i], childContext);
-        }
-        /* Constraint def body must be Boolean. */
-        if (n->as.scope.defKind == DEF_CONSTRAINT) {
-            checkConstraintBody(n->as.scope.body, n->line,
-                                "Constraint def");
-        }
-        break;
+/* `insideEnumDef` (the only piece of context-dependent state the old
+ * walker threaded as a parameter) reduces to "is my immediate parent
+ * a DEF_ENUM definition?".  The framework's `enclosing` pointer is
+ * the immediate ancestor classifier, so we read it directly at the
+ * leaf instead of carrying a flag down the tree.                    */
+static bool isInsideEnumDef(const Node* enclosing) {
+    return enclosing
+        && enclosing->kind == NODE_DEFINITION
+        && enclosing->as.scope.defKind == DEF_ENUM;
+}
+
+static void onDefinitionLeave(AstWalkCtx* ctx, Node* n) {
+    (void)ctx;
+    /* Constraint def body must be Boolean.  Run on Leave so children
+     * (which may be referenced by the body) have already been
+     * checked.                                                       */
+    if (n->as.scope.defKind == DEF_CONSTRAINT) {
+        checkConstraintBody(n->as.scope.body, n->line, "Constraint def");
     }
-    case NODE_USAGE:
-        for (int i = 0; i < n->as.usage.memberCount; i++) {
-            walk(n->as.usage.members[i], false);
+}
+
+static void onUsageLeave(AstWalkCtx* ctx, Node* n) {
+    (void)ctx;
+    /* Inline body of an anonymous constraint usage must be Boolean. */
+    if (n->as.usage.defKind == DEF_CONSTRAINT && n->as.usage.body) {
+        checkConstraintBody(n->as.usage.body, n->line, "Inline constraint");
+    }
+    /* Validate type-ref target for assert/assume/require usages. */
+    checkAssertionRef(n);
+}
+
+static void onAttribute(AstWalkCtx* ctx, Node* n) {
+    checkAttribute(n, isInsideEnumDef(ctx->enclosing));
+}
+
+static void onSuccession(AstWalkCtx* ctx, Node* n) {
+    (void)ctx;
+    checkSuccessionRef(n->as.succession.first, n->line);
+    /* Qualified-name targets are leaves the framework won't walk into;
+     * check them here.  Inline-action targets (NODE_USAGE) are
+     * descended automatically by the framework, picking up nested
+     * checks.                                                         */
+    for (int i = 0; i < n->as.succession.targets.count; i++) {
+        const Node* t = n->as.succession.targets.items[i];
+        if (t && t->kind == NODE_QUALIFIED_NAME) {
+            checkSuccessionRef(t, n->line);
         }
-        /* Inline body of an anonymous constraint usage must be Boolean. */
-        if (n->as.usage.defKind == DEF_CONSTRAINT && n->as.usage.body) {
-            checkConstraintBody(n->as.usage.body, n->line,
-                                "Inline constraint");
-        }
-        /* Validate type-ref target for assert/assume/require usages. */
-        checkAssertionRef(n);
-        break;
-    case NODE_ATTRIBUTE:
-        checkAttribute(n, insideEnumDef);
-        break;
-    case NODE_SUCCESSION:
-        checkSuccessionRef(n->as.succession.first, n->line);
-        for (int i = 0; i < n->as.succession.targets.count; i++) {
-            const Node* t = n->as.succession.targets.items[i];
-            if (!t) continue;
-            if (t->kind == NODE_QUALIFIED_NAME) {
-                checkSuccessionRef(t, n->line);
-            } else {
-                /* Inline action declaration — recurse so its own
-                 * members get checked too.                            */
-                walk(t, false);
-            }
-        }
-        break;
-    default:
-        break;
     }
 }
 
@@ -472,7 +535,13 @@ static void walk(const Node* n, bool insideEnumDef) {
 bool typecheckProgram(const Node* program) {
     errorCount = 0;
     initStdlibCache();
-    walk(program, false);
+    static const AstVisitor v = {
+        .onDefinitionLeave = onDefinitionLeave,
+        .onUsageLeave      = onUsageLeave,
+        .onAttribute       = onAttribute,
+        .onSuccession      = onSuccession,
+    };
+    astWalkProgram((Node*)program, &v, NULL);
     if (errorCount > 0) {
         fprintf(stderr, "Type checking failed with %d error%s.\n",
                 errorCount, errorCount == 1 ? "" : "s");

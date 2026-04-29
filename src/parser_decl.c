@@ -201,6 +201,9 @@ static const KindInfo kObjective  = { DEF_OBJECTIVE,  false, true,  true,  "obje
 __attribute__((unused))
 static const KindInfo kSatisfy    = { DEF_SATISFY,    false, true,  true,  "satisfy"    };
 static const KindInfo kAnalysis   = { DEF_ANALYSIS,   false, true,  false, "analysis"   };
+static const KindInfo kVerify     = { DEF_VERIFY,     false, true,  false, "verify"     };
+static const KindInfo kStakeholder= { DEF_STAKEHOLDER,false, true,  false, "stakeholder"};
+static const KindInfo kRender     = { DEF_RENDER,     false, true,  false, "render"     };
 /* `subject e : Engine;` doesn't use the definitionOrUsage() dispatcher;
  * subjectStatement() handles it directly, so there's no KindInfo for
  * it.  The DEF_SUBJECT enum value is still useful as a tag on the
@@ -431,6 +434,20 @@ static Node* usage(const KindInfo* k, Direction dir) {
             }
             name = (Token){0};       /* drop the misread name */
         }
+        /* In verify-context (and similar viewpoint kinds), if the
+         * "name" we just consumed is followed by `.`, it's actually
+         * a dotted reference being verified, not a name.  Reinterpret
+         * by building a qname and stashing it; we'll merge it into
+         * rels.specializes after parseFeatureRelationships() runs.    */
+        if (k->kind == DEF_VERIFY && check(TOKEN_DOT)) {
+            anonFlowSource = astMakeNode(NODE_QUALIFIED_NAME, name.line);
+            astAppendQualifiedPart(anonFlowSource, name);
+            while (match(TOKEN_DOT)) {
+                consume(TOKEN_IDENTIFIER, "Expected name after '.'.");
+                astAppendQualifiedPart(anonFlowSource, parser.previous);
+            }
+            name = (Token){0};
+        }
     } else {
         /* A bare relationship token (`:`, `:>`, `:>>`, `redefines`,
          * `subsets`, `specializes`, `[`) implies an anonymous usage —
@@ -449,7 +466,12 @@ static Node* usage(const KindInfo* k, Direction dir) {
                       || check(TOKEN_EQUAL)
                       || check(TOKEN_DEFAULT)
                       /* `constraint { expr }` — anonymous inline constraint. */
-                      || (k->kind == DEF_CONSTRAINT && check(TOKEN_LEFT_BRACE));
+                      || (k->kind == DEF_CONSTRAINT && check(TOKEN_LEFT_BRACE))
+                      /* `connection { end ... }` — anonymous connection
+                       * with body (no `connect` clause).  Used with
+                       * `#metadata connection { ... }` annotations.       */
+                      || ((k->kind == DEF_CONNECTION || k->kind == DEF_INTERFACE)
+                          && check(TOKEN_LEFT_BRACE));
         if (!anonRelOk
             && (!k->allowsAnonymous
                 || (k->kind == DEF_CONNECTION && !check(TOKEN_CONNECT))
@@ -499,6 +521,12 @@ static Node* usage(const KindInfo* k, Direction dir) {
 
     /* ---- optional endpoint clause ----------------------------------- */
     NodeList ends = {0};
+    if (anonFlowSource && k->kind == DEF_VERIFY) {
+        /* Reinterpreted name — not a flow source, but a verify target.
+         * Splice into rels.specializes so it appears on the usage.    */
+        astListAppend(&rels.specializes, anonFlowSource);
+        anonFlowSource = NULL;
+    }
     if (anonFlowSource) {
         /* Pre-built source ref from the name reinterpretation above.   */
         astListAppend(&ends, anonFlowSource);
@@ -738,6 +766,19 @@ static Node* assertedConstraintOrRequirement(AssertKind kw, int kwLine) {
     bool isReq = false;
     if (match(TOKEN_REQUIREMENT))      isReq = true;
     else if (match(TOKEN_CONSTRAINT))  isReq = false;
+    else if (check(TOKEN_IDENTIFIER)) {
+        /* `assert vehicleSpecification;` and `require transportRequirements;`
+         * — bare-reference assertion form.  The referent is a known
+         * requirement; no `constraint`/`requirement` keyword between.
+         * Build a requirement usage that just specializes the named ref.   */
+        isReq = true;
+        Node* u = astMakeNode(NODE_USAGE, kwLine);
+        u->as.usage.defKind    = DEF_REQUIREMENT;
+        u->as.usage.assertKind = kw;
+        astListAppend(&u->as.usage.specializes, dottedReference());
+        consume(TOKEN_SEMICOLON, "Expected ';' after bare-reference assertion.");
+        return u;
+    }
     else {
         errorAtCurrent("Expected 'constraint' or 'requirement' after "
                        "assertion keyword.");
@@ -793,15 +834,44 @@ static Node* assertedConstraintOrRequirement(AssertKind kw, int kwLine) {
  *  with other named features.                                         */
 static Node* subjectStatement(void) {
     int line = parser.previous.line;
-    consume(TOKEN_IDENTIFIER, "Expected subject name.");
-    Token name = parser.previous;
     Node* u = astMakeNode(NODE_USAGE, line);
     u->as.usage.defKind = DEF_SUBJECT;
-    u->as.usage.name    = name;
-    if (match(TOKEN_COLON)) {
-        appendQualifiedNameList(&u->as.usage.types);
+
+    /* Optional name (or anonymous if next is `=`/`:`/etc).
+     *
+     * Real SysML files use these forms:
+     *   subject vehicle;
+     *   subject vehicle : Vehicle;
+     *   subject vehicle :> baseVehicle;
+     *   subject vehicle [2] :> alternatives;
+     *   subject = expr;                       — anonymous, initializer
+     *   subject vehicle default expr;         — name + initializer
+     *   subject vehicle { ... }               — name + body
+     */
+    if (check(TOKEN_IDENTIFIER)) {
+        advance();
+        u->as.usage.name = parser.previous;
     }
-    consume(TOKEN_SEMICOLON, "Expected ';' after subject.");
+
+    /* Optional feature-relationship tail: `: T`, `:> X`, `[n]`, etc. */
+    FeatureRels rels = parseFeatureRelationships();
+    u->as.usage.types        = rels.types;
+    u->as.usage.specializes  = rels.specializes;
+    u->as.usage.redefines    = rels.redefines;
+    u->as.usage.multiplicity = rels.multiplicity;
+
+    /* Optional initializer (`= expr` or `default expr`).            */
+    if (match(TOKEN_EQUAL) || match(TOKEN_DEFAULT)) {
+        u->as.usage.defaultValue = expression();
+    }
+
+    /* Optional inline body — parse-and-skipped (no AST slot for
+     * subject members yet).                                         */
+    if (match(TOKEN_LEFT_BRACE)) {
+        skipBracedBlock();
+    } else {
+        consume(TOKEN_SEMICOLON, "Expected ';' after subject.");
+    }
     return u;
 }
 
@@ -833,7 +903,7 @@ static Node* parseActionRef(void) {
  * give it a brace-delimited body.                                    */
 static Node* parseThenTarget(void) {
     if (match(TOKEN_ACTION)) {
-        /* Inline `then action a [: T] [{ … }];` form.                */
+        /* Inline `then action a [: T] [accept/send/parallel <stuff>] [{ … }];` form. */
         Node* u = astMakeNode(NODE_USAGE, parser.previous.line);
         u->as.usage.defKind = DEF_ACTION;
         if (check(TOKEN_IDENTIFIER)) {
@@ -842,6 +912,18 @@ static Node* parseThenTarget(void) {
         }
         if (match(TOKEN_COLON)) {
             appendQualifiedNameList(&u->as.usage.types);
+        }
+        /* Accept/send/parallel tail clauses on the inline action.    */
+        bool isSend = check(TOKEN_IDENTIFIER) && parser.current.length == 4
+                   && memcmp(parser.current.start, "send", 4) == 0;
+        bool isParallel = check(TOKEN_IDENTIFIER) && parser.current.length == 8
+                       && memcmp(parser.current.start, "parallel", 8) == 0;
+        if (check(TOKEN_ACCEPT) || isSend || isParallel) {
+            advance();
+            while (!check(TOKEN_SEMICOLON) && !check(TOKEN_LEFT_BRACE)
+                   && !check(TOKEN_THEN) && !check(TOKEN_EOF)) {
+                advance();
+            }
         }
         if (match(TOKEN_LEFT_BRACE)) {
             while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
@@ -852,6 +934,13 @@ static Node* parseThenTarget(void) {
             consume(TOKEN_RIGHT_BRACE, "Expected '}' to close inline action body.");
         }
         return u;
+    }
+    /* `then event <ref>;` — succession target is an event reference.
+     * Eat the `event` keyword and read the rest as a dotted ref.    */
+    if (match(TOKEN_EVENT)) {
+        /* Optional `occurrence` keyword between `event` and the ref. */
+        (void)match(TOKEN_OCCURRENCE);
+        return dottedReference();
     }
     /* `then fork <name>;` and `then join <name>;` — fork/join are not
      * SysML keywords in our lexer but appear as bare identifiers
@@ -931,7 +1020,20 @@ static Node* parseSuccessionStmt(TokenType kw) {
         }
     }
 
-    consume(TOKEN_SEMICOLON, "Expected ';' after succession.");
+    /* Trailing `;` is optional when the last `then` target was an
+     * inline action with a body — the closing `}` is a natural
+     * terminator and real SysML files routinely omit the `;`.        */
+    Node* lastTarget = s->as.succession.targets.count > 0
+        ? s->as.succession.targets.items[s->as.succession.targets.count - 1]
+        : NULL;
+    bool lastWasInlineWithBody = lastTarget
+        && lastTarget->kind == NODE_USAGE
+        && lastTarget->as.usage.memberCount > 0;
+    if (lastWasInlineWithBody) {
+        (void)match(TOKEN_SEMICOLON);
+    } else {
+        consume(TOKEN_SEMICOLON, "Expected ';' after succession.");
+    }
     return s;
 }
 
@@ -1185,19 +1287,40 @@ static Node* commentDecl(void) {
 static Node* dependencyDecl(void) {
     int line = parser.previous.line;            /* 'dependency' just consumed */
 
+    /* Two surface forms:
+     *   dependency [<name>] from <srcs> to <tgts>;
+     *   dependency <src> to <tgts>;            — no `from`, no name
+     *
+     * For the no-`from` form the IDENTIFIER (or qname) right after
+     * `dependency` is the single source.                            */
     Token name = {0};
+    NodeList sources = {0};
+    NodeList targets = {0};
+
     if (check(TOKEN_IDENTIFIER)) {
         advance();
         name = parser.previous;
     }
 
-    consume(TOKEN_FROM, "Expected 'from' in dependency.");
-    NodeList sources = {0};
-    appendQualifiedNameList(&sources);
-
-    consume(TOKEN_TO, "Expected 'to' in dependency.");
-    NodeList targets = {0};
-    appendQualifiedNameList(&targets);
+    if (match(TOKEN_FROM)) {
+        appendQualifiedNameList(&sources);
+        consume(TOKEN_TO, "Expected 'to' in dependency.");
+        appendQualifiedNameList(&targets);
+    } else if (match(TOKEN_TO)) {
+        /* No `from` — the name we just consumed is the source.  Wrap
+         * it as a single-segment qname and clear the name slot.     */
+        if (name.length == 0) {
+            errorAtCurrent("Expected source name before 'to' in dependency.");
+        } else {
+            Node* q = astMakeNode(NODE_QUALIFIED_NAME, line);
+            astAppendQualifiedPart(q, name);
+            astListAppend(&sources, q);
+            name = (Token){0};
+        }
+        appendQualifiedNameList(&targets);
+    } else {
+        errorAtCurrent("Expected 'from' or 'to' in dependency.");
+    }
 
     consume(TOKEN_SEMICOLON, "Expected ';' after dependency.");
 
@@ -1470,14 +1593,66 @@ Node* declaration(void) {
     else if (match(TOKEN_VERIFICATION)) result = definitionOrUsage(&kVerification, dir, mods);
     else if (match(TOKEN_OBJECTIVE))    result = definitionOrUsage(&kObjective,  dir, mods);
     else if (match(TOKEN_ANALYSIS))     result = definitionOrUsage(&kAnalysis,   dir, mods);
+    else if (match(TOKEN_VERIFY))       result = definitionOrUsage(&kVerify,     dir, mods);
+    else if (match(TOKEN_STAKEHOLDER))  result = definitionOrUsage(&kStakeholder,dir, mods);
+    else if (match(TOKEN_RENDER))       result = definitionOrUsage(&kRender,     dir, mods);
+    else if (match(TOKEN_FRAME)) {
+        /* `frame concern X:T;` — frame prefix on a concern usage.    */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on frame.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on frame.");
+        if (check(TOKEN_CONCERN)) {
+            advance();      /* eat 'concern' */
+            result = definitionOrUsage(&kConcern, DIR_NONE, (FeatureModifiers){0});
+        } else {
+            /* Bare frame.  Treat the rest as a concern usage anyway. */
+            result = definitionOrUsage(&kConcern, DIR_NONE, (FeatureModifiers){0});
+        }
+        if (result && result->kind == NODE_USAGE) {
+            result->as.usage.defKind = DEF_FRAME;
+        }
+    }
+    else if (match(TOKEN_EXPOSE)) {
+        /* `expose <qname>;` — view-body statement.  Like filter,
+         * just parse-and-skip until ';'.                              */
+        if (dir != DIR_NONE) error("Direction modifier is not valid on expose.");
+        if (hasAnyModifier(mods)) error("Feature modifiers are not valid on expose.");
+        while (!check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) advance();
+        match(TOKEN_SEMICOLON);
+        result = NULL;
+    }
     else if (match(TOKEN_SATISFY)) {
-        /* `satisfy <qname> [by <qname>] [{ body }];`                  */
+        /* `satisfy [requirement] [<name>:]<qname> [by <qname>] [{ body }];`
+         * The `requirement` introducer is optional sugar (mirrors the
+         * `assert constraint`/`assert requirement` shape).  An optional
+         * `<name>:` may also precede the requirement reference for
+         * named satisfies.                                            */
         if (dir != DIR_NONE) error("Direction modifier is not valid on satisfy.");
         if (hasAnyModifier(mods)) error("Feature modifiers are not valid on satisfy.");
         int line = parser.previous.line;
         Node* u = astMakeNode(NODE_USAGE, line);
         u->as.usage.defKind = DEF_SATISFY;
-        astListAppend(&u->as.usage.types, dottedReference());
+        (void)match(TOKEN_REQUIREMENT);
+        /* Lookahead: `<name>:<qname>` form has IDENTIFIER then COLON.
+         * If both are present, eat them and use the qname after.      */
+        if (check(TOKEN_IDENTIFIER)) {
+            Token cand = parser.current;
+            advance();
+            if (match(TOKEN_COLON)) {
+                u->as.usage.name = cand;
+                astListAppend(&u->as.usage.types, dottedReference());
+            } else {
+                /* It WAS the qname (single segment).                  */
+                Node* q = astMakeNode(NODE_QUALIFIED_NAME, cand.line);
+                astAppendQualifiedPart(q, cand);
+                while (match(TOKEN_DOT) || match(TOKEN_COLON_COLON)) {
+                    consume(TOKEN_IDENTIFIER, "Expected name after '.' or '::'.");
+                    astAppendQualifiedPart(q, parser.previous);
+                }
+                astListAppend(&u->as.usage.types, q);
+            }
+        } else {
+            astListAppend(&u->as.usage.types, dottedReference());
+        }
         if (check(TOKEN_IDENTIFIER) && parser.current.length == 2
             && memcmp(parser.current.start, "by", 2) == 0) {
             advance();      /* eat 'by' */
@@ -1580,14 +1755,33 @@ Node* declaration(void) {
          * as the usage's name when it's a single segment; fall through
          * to the regular usage parser otherwise.                         */
         if (check(TOKEN_IDENTIFIER)) {
-            /* Capture potential single-segment name; if dots follow, it's
-             * a multi-segment reference, in which case there's no name.  */
+            /* `perform <X>` has three possible shapes:
+             *
+             *   1. declaration:    perform action foo;
+             *                      perform foo : T;
+             *                      perform foo redefines bar;
+             *      → candidate IS the usage's name.  Recognized by
+             *        the explicit `action` keyword OR by a following
+             *        clause that only makes sense on a fresh decl.
+             *
+             *   2. bare reference: perform foo;
+             *      → candidate is a 1-segment qname stored in
+             *        specializes; the usage stays anonymous so it
+             *        can't shadow the outer `foo` it points at.
+             *
+             *   3. dotted reference: perform A::B::foo;
+             *      → multi-segment qname stored in specializes.
+             *
+             * Cases 2 and 3 share the same handler — case 2 is just
+             * case 3 where the trailing while-loop runs zero times. */
             Token candidate = parser.current;
             advance();
-            if (check(TOKEN_COLON_COLON) || check(TOKEN_DOT)) {
-                /* Multi-segment qname — the candidate was the first
-                 * segment.  Build a qname starting from it and store it
-                 * as a specialization of the perform usage.              */
+            bool isDottedRef = check(TOKEN_COLON_COLON) || check(TOKEN_DOT);
+            bool isDeclaration = !isDottedRef
+                && (hadActionKw || check(TOKEN_REDEFINES) || check(TOKEN_COLON));
+            if (isDeclaration) {
+                u->as.usage.name = candidate;
+            } else {
                 Node* q = astMakeNode(NODE_QUALIFIED_NAME, line);
                 astAppendQualifiedPart(q, candidate);
                 while (match(TOKEN_COLON_COLON) || match(TOKEN_DOT)) {
@@ -1595,9 +1789,6 @@ Node* declaration(void) {
                     astAppendQualifiedPart(q, parser.previous);
                 }
                 astListAppend(&u->as.usage.specializes, q);
-            } else {
-                /* Single segment — that's the usage's name.              */
-                u->as.usage.name = candidate;
             }
         }
         /* Optional `: Type`. */
@@ -1736,18 +1927,25 @@ Node* declaration(void) {
         result = allocateStatement();
     }
     else if (match(TOKEN_ATTRIBUTE)) {
-        if (dir != DIR_NONE) error("Direction modifier is not valid on an attribute.");
+        /* `in attribute scenario: T;` — calc/action def parameters
+         * routinely carry a direction modifier.  Real SysML accepts
+         * direction here; the AST has a direction slot already, so we
+         * just need to stop rejecting it.                            */
         /* `attribute def Name [:> Parent];`  — full definition shape.
          * Route through definitionOrUsage so the def/usage dispatch
          * works correctly.  For the usage path, use attributeDecl()
          * which has the special handling for redefines/specializes
          * shortcuts.                                                  */
         if (check(TOKEN_DEF)) {
+            if (dir != DIR_NONE) {
+                error("Direction modifier is not valid on a definition.");
+            }
             result = definitionOrUsage(&kAttributeDef, dir, mods);
         } else {
             result = attributeDecl();
             /* Attributes accept all four modifiers (they're usages). */
             if (result && result->kind == NODE_ATTRIBUTE) {
+                result->as.attribute.direction           = dir;
                 result->as.attribute.isDerived           = mods.isDerived;
                 result->as.attribute.isAbstract          = mods.isAbstract;
                 result->as.attribute.isConstant          = mods.isConstant;

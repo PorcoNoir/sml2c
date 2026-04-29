@@ -98,8 +98,55 @@ typedef enum {
     DEF_VERIFICATION,       /* `verification def MassTest;` */
     DEF_OBJECTIVE,          /* `objective :MaximizeObjective;` */
     DEF_SATISFY,            /* `satisfy X by Y { ... }` — assertion */
-    DEF_ANALYSIS            /* `analysis name { ... }` */
+    DEF_ANALYSIS,           /* `analysis name { ... }` */
+    DEF_VERIFY,             /* `verify <ref> { body }` */
+    DEF_FRAME,              /* `frame concern X;` */
+    DEF_STAKEHOLDER,        /* `stakeholder X:T;` */
+    DEF_RENDER,             /* `render asTreeDiagram;` */
+    DEF_EXPOSE,             /* `expose <qname>;` */
+    DEF_KIND_COUNT          /* sentinel — number of defined DefKinds. */
 } DefKind;
+
+/* ---- DefKind metadata table -----------------------------------------
+ *
+ * Single source of truth for the per-DefKind strings each pass needs.
+ * Adding a new DefKind requires (1) extending the enum above and
+ * (2) adding one row to g_defKindTable in ast.c — no longer a sweep
+ * across codegen_json, codegen_sysml, connectchecker, and ast's two
+ * label arrays.  The fields:
+ *
+ *   keyword       — source keyword used to introduce a usage of this
+ *                   kind ("part", "use case", "event occurrence").
+ *                   Used by codegen_sysml; also serves as the bare
+ *                   noun in some diagnostics.
+ *   defLabel      — name of the *def* form for printers ("PartDef").
+ *   usageLabel    — name of the *usage* form for printers ("Part").
+ *   defJson       — JSON-output kind tag for definitions.  Almost
+ *                   always equal to defLabel; kept separate in case a
+ *                   future schema diverges.
+ *   describeUsage — human description for diagnostic messages
+ *                   ("part usage", "subject", "end declaration").
+ *
+ * A defLabel beginning with `?` marks a kind that has no source-level
+ * def form (DEF_REFERENCE, DEF_SUBJECT) — printing the def form is a
+ * compiler bug, but the placeholder makes the array lookup safe.    */
+typedef struct {
+    const char* keyword;
+    const char* defLabel;
+    const char* usageLabel;
+    const char* defJson;
+    const char* describeUsage;
+} DefKindInfo;
+
+const DefKindInfo* defKindInfo(DefKind k);
+
+/* Convenience accessors for the most common per-pass needs.  Each
+ * returns the string from the table; callers that want to format it
+ * differently can pull the full DefKindInfo and assemble.            */
+const char* defKindKeyword(DefKind k);    /* "part"            */
+const char* defKindDefLabel(DefKind k);   /* "PartDef"         */
+const char* defKindUsageLabel(DefKind k); /* "Part"            */
+const char* defKindDescribe(DefKind k);   /* "part usage"      */
 
 /* The `assert` / `assume` / `require` modifier on a constraint or
  * requirement usage.  Bare usages without one of these keywords are
@@ -154,8 +201,15 @@ typedef struct {
 typedef struct Node Node;
 
 struct Node {
-    NodeKind kind;
-    int      line;
+    NodeKind    kind;
+    int         line;
+    /* For expression-kind nodes (NODE_LITERAL, NODE_BINARY, NODE_UNARY,
+     * and NODE_QUALIFIED_NAME when used as a value reference), this is
+     * the bottom-up inferred type — a pointer to the NODE_DEFINITION
+     * that the expression evaluates to.  NULL means unknown / unresolved
+     * / not yet inferred / not an expression node.  Populated by the
+     * typechecker pass; consumed by codegen and by --emit-json.        */
+    const Node* inferredType;
     union {
         /* PROGRAM, PACKAGE, DEFINITION — all "named scopes" with members.
          * defKind is meaningful only for DEFINITION; the other two leave
@@ -221,6 +275,7 @@ struct Node {
         struct {
             Token      name;
             Visibility visibility;
+            Direction  direction;   /* `in attribute scenario : T;`      */
             bool       isDerived;   /* `derived attribute area = ...;`   */
             bool       isAbstract;  /* `abstract attribute ...`          */
             bool       isConstant;  /* `constant attribute pi = 3.14;`   */
@@ -445,5 +500,18 @@ void  astSetVisibility(Node* node, Visibility v);
 
 /* ---- inspection ---- */
 void  astPrint(const Node* root);
+
+/* True if the two tokens span the same byte sequence.  Pure-text
+ * comparison — no canonicalization, no symbol table lookup.  Used
+ * everywhere two identifier tokens need to be compared by name. */
+bool  tokensEqual(Token a, Token b);
+
+/* The user-visible name token of a node, or an empty token (length
+ * 0) if the node kind has no name slot or the name was omitted in
+ * source.  Anonymous declarations (length-0 name) are valid SysML
+ * for several constructs — `connect a to b;`, `perform A::B
+ * redefines C;`, etc. — so callers must check `length > 0` before
+ * using the result.  See `tokensEqual` for the natural follow-up. */
+Token nodeName(const Node* n);
 
 #endif /* SYSMLC_AST_H */

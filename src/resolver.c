@@ -45,30 +45,75 @@ static void resolveNodeList(NodeList* list, Scope* current);
  * resolution NULL.                                                  */
 static void tryResolveQualifiedName(Node* qname, Scope* current);
 
-/* Phase-1 pre-pass: walk a member array and declare every named
- * member in the inner scope.  Imports update wildcardImports and
- * eagerly resolve their target so wildcard search works. */
-static void declareMembers(Scope* inner, Node** members, int count) {
+/* Three single-purpose passes over the member array.
+ *
+ *   1. declareNamedMembers — strong bindings for every member that
+ *      has a name token.  Runs first so passes 2 and 3 can rely on
+ *      every real decl in the scope being locatable.
+ *
+ *   2. registerImports — resolves each import's target qname against
+ *      the inner scope (so an import naming a sibling pass-1 decl
+ *      finds it), appends wildcard imports to inner->wildcardImports,
+ *      and soft-aliases non-wildcard imports under the qname's last
+ *      segment.
+ *
+ *   3. aliasAnonymousRedefines — soft-aliases anonymous USAGE nodes
+ *      (no name token) whose `redefines` list is non-empty, under
+ *      the redefined name.  Lets `perform A::B redefines foo;` be
+ *      reachable as `foo` from sibling code that wants the local
+ *      copy of foo rather than the inherited stub.
+ *
+ * Both alias passes use declareNameIfFree, so a real pass-1 decl
+ * always wins on name conflict.  This makes the relative ordering
+ * of passes 2 and 3 unimportant for correctness; the chosen order
+ * (imports first, redefines last) just reflects "redefines aliases
+ * are the most local thing in this scope, so they're the last
+ * fallback to register". */
+
+static void declareNamedMembers(Scope* inner, Node** members, int count) {
     for (int i = 0; i < count; i++) {
         Node* m = members[i];
-        if (m->kind == NODE_IMPORT) {
-            /* Resolve the target package now, against the OUTER scope:
-             * import targets refer to siblings of our containing
-             * scope, not to anything inside us.                       */
-            if (m->as.import.target) {
-                Scope* outer = inner->parent ? inner->parent : inner;
-                tryResolveQualifiedName(m->as.import.target, outer);
-            }
-            if (m->as.import.wildcard) {
-                astListAppend(&inner->wildcardImports, m);
-            }
-            /* Non-wildcard imports would bring the trailing segment
-             * into scope; deferred until we add aliasing support. */
-            continue;
-        }
+        if (!m || m->kind == NODE_IMPORT) continue;
         Token name = nodeName(m);
         if (name.length > 0) declareName(inner, name, m);
     }
+}
+
+static void registerImports(Scope* inner, Node** members, int count) {
+    for (int i = 0; i < count; i++) {
+        Node* m = members[i];
+        if (!m || m->kind != NODE_IMPORT) continue;
+        if (m->as.import.target) {
+            tryResolveQualifiedName(m->as.import.target, inner);
+        }
+        if (m->as.import.wildcard) {
+            astListAppend(&inner->wildcardImports, m);
+            continue;
+        }
+        /* Non-wildcard `import A::B::C;` — soft-alias C. */
+        const Node* tgt      = m->as.import.target;
+        const Node* resolved = tgt ? tgt->as.qualifiedName.resolved : NULL;
+        if (resolved) {
+            declareNameIfFree(inner, qnameLastSegment(tgt), resolved);
+        }
+    }
+}
+
+static void aliasAnonymousRedefines(Scope* inner, Node** members, int count) {
+    for (int i = 0; i < count; i++) {
+        Node* m = members[i];
+        if (!m || m->kind != NODE_USAGE) continue;
+        if (nodeName(m).length > 0) continue;     /* only anonymous */
+        if (m->as.usage.redefines.count == 0) continue;
+        const Node* rref = m->as.usage.redefines.items[0];
+        declareNameIfFree(inner, qnameLastSegment(rref), m);
+    }
+}
+
+static void declareMembers(Scope* inner, Node** members, int count) {
+    declareNamedMembers     (inner, members, count);
+    registerImports         (inner, members, count);
+    aliasAnonymousRedefines (inner, members, count);
 }
 
 /* ---- resolution drivers ----------------------------------------- */
@@ -256,6 +301,7 @@ static void resolveNode(Node* n, Scope* current) {
         resolveMultiSegmentRedefs(&n->as.scope.redefines, current);
 
         Scope inner = { .parent = current, .what = "definition" };
+        inner.inheritedFrom = firstResolvedQname(&n->as.scope.specializes);
         resolveScopeBody(&inner, n->as.scope.members, n->as.scope.memberCount);
         /* Constraint def body expressions reference parameters declared
          * as members; resolve the body inside the inner scope so those
@@ -282,6 +328,13 @@ static void resolveNode(Node* n, Scope* current) {
 
         if (n->as.usage.memberCount > 0) {
             Scope inner = { .parent = current, .what = "usage" };
+            /* Inherit from the usage's declared type or, failing
+             * that, its first specializes — both bring in features
+             * that should be visible by bare name inside the body. */
+            inner.inheritedFrom = firstResolvedQname(&n->as.usage.types);
+            if (!inner.inheritedFrom) {
+                inner.inheritedFrom = firstResolvedQname(&n->as.usage.specializes);
+            }
             resolveScopeBody(&inner, n->as.usage.members,
                              n->as.usage.memberCount);
             freeScope(&inner);

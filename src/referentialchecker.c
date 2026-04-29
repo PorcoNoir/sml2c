@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "referentialchecker.h"
+#include "ast_walk.h"
 
 static int errorCount = 0;
 
@@ -88,9 +89,6 @@ static bool usageMustBeReferential(const Node* usage, const Node* enclosing) {
 
 /* ---- the walk -------------------------------------------------- */
 
-/* Forward declaration. */
-static void walk(Node* n, const Node* enclosing);
-
 /* Apply rules to a Usage node before recursing into its body.    */
 static void inferOnUsage(Node* u, const Node* enclosing) {
     /* Rule #2 special case in the parser: AttributeUsage in spec,
@@ -126,43 +124,27 @@ static void checkFlowDefinitionEnds(const Node* def) {
     }
 }
 
-/* Generic recursion. */
-static void walk(Node* n, const Node* enclosing) {
-    if (!n) return;
-    switch (n->kind) {
-    case NODE_PROGRAM:
-    case NODE_PACKAGE:
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i], n);
-        }
-        break;
+static void onDefinition(AstWalkCtx* ctx, Node* n) {
+    (void)ctx;
+    checkFlowDefinitionEnds(n);
+}
 
-    case NODE_DEFINITION:
-        checkFlowDefinitionEnds(n);
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i], n);
-        }
-        break;
+static void onUsage(AstWalkCtx* ctx, Node* n) {
+    inferOnUsage(n, ctx->enclosing);
+}
 
-    case NODE_USAGE:
-        inferOnUsage(n, enclosing);
-        for (int i = 0; i < n->as.usage.memberCount; i++) {
-            walk(n->as.usage.members[i], n);
-        }
-        break;
-
-    case NODE_ATTRIBUTE:
-        inferOnAttribute(n, enclosing);
-        break;
-
-    default:
-        break;
-    }
+static void onAttribute(AstWalkCtx* ctx, Node* n) {
+    inferOnAttribute(n, ctx->enclosing);
 }
 
 bool checkReferential(Node* program) {
     errorCount = 0;
-    walk(program, NULL);
+    static const AstVisitor v = {
+        .onDefinitionEnter = onDefinition,
+        .onUsageEnter      = onUsage,
+        .onAttribute       = onAttribute,
+    };
+    astWalkProgram(program, &v, NULL);
     if (errorCount > 0) {
         fprintf(stderr, "Referential checking failed with %d error%s.\n",
                 errorCount, errorCount == 1 ? "" : "s");

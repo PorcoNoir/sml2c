@@ -1,8 +1,12 @@
 # sml2c — a SysML v2 compiler in C
 
-A compiler for a textual subset of OMG SysML v2, written in hand-rolled C
-following the style of *Crafting Interpreters* (clox).  Single-file source
-input, validator-first design, multiple back-ends.
+A compiler for a textual subset of OMG SysML v2, written in hand-rolled
+C following the style of *Crafting Interpreters* (clox).  Single-file
+source input, validator-first design, multiple back-ends.
+
+For per-version notes see [CHANGELOG.md](CHANGELOG.md).
+For a long-form narrative of how the project got here, see
+[chat_history.md](chat_history.md).
 
 ## What it does
 
@@ -22,292 +26,154 @@ source ─┬─► scanner ─► parser ─► resolver ─► typechecker
         │                                    referentialchecker
         │                                         │
         │                                         ▼
-        └────────────► back-end (AST print | JSON | SysML)
+        └────────────► back-end (AST print | JSON | SysML | C)
 ```
 
 Every pass after the parser is independently bypassable via a `--no-*`
-flag, so it's straightforward to inspect intermediate state when debugging.
+flag, so it's straightforward to inspect intermediate state when
+debugging.
 
 ## Build and run
 
 ```
-make                # builds bin/sml2c
-make test-all       # 36 strict pass/fail tests
-make test-graphsml  # 19 graphsml adapter conversions
-./verify-tokens.sh  # sanity-check parser ↔ scanner token consistency
+make                 # build bin/sml2c
+make sweep           # full validation (verify-tokens, test-all,
+                     # test-c, test-graphsml, test-ptc)
 
 bin/sml2c file.sysml                # full pipeline, prints AST tree
 bin/sml2c --tokens file.sysml       # token stream
 bin/sml2c --emit-json file.sysml    # AST as JSON
 bin/sml2c --emit-sysml file.sysml   # canonical SysML (round-trip)
-bin/sml2c --no-typecheck file.sysml # skip the typechecker
+bin/sml2c --emit-c file.sysml       # C header (typed-AST first slice)
+bin/sml2c --no-typecheck file.sysml # skip the typechecker (any --no-*
+                                    # flag isolates a layer for debug)
 ```
 
 C11, no external dependencies.  Tested with both `gcc` and `clang`.
 
-## Language subset
+## Architecture
 
-Supported syntactic forms:
+Validator-first, multi-backend.  The AST itself is the IR; passes
+mutate or annotate it but don't rewrite shape.  This keeps `--emit-sysml`
+round-trippable (the printer can recover what the user wrote) while
+still letting later passes attach inferred information for the codegen
+back-ends to read.
 
-```
-package P { ... }
-import A::B::C;            import A::B::*;
-part def Engine { ... }    part myEngine : Engine;
-port def Sensor { ... }    port iface : Sensor;     port iface : ~Sensor;  // conjugated
-interface def Bus { ... }
-item def Signal { ... }
-connection def Wire { ... }
-flow def DataFlow { ... }
-attribute name : Type = expr;
-ref name : Type;           // bare ReferenceUsage
-end name : Type;           // inside connection/flow defs
-enum def Color { red; green; blue; }
-alias E for A::B::C;
-comment N about X /* body */
-dependency d from A to B;
-doc /* description */
-connect a.x to b.y;        flow from a.x to b.y;
-
-constraint def TorqueLimit { in t : Real; in m : Real; t <= m }
-assert constraint c : TorqueLimit;
-assert constraint { x > 0 and x < 100 }   // anonymous inline
-requirement def MaxTorque {
-    subject e : Engine;
-    require constraint c : TorqueLimit;
-}
-require requirement r : MaxTorque;
-
-action def DeliverGifts {
-    in route : Route; out delivered : Boolean;
-    first start; then load; then ship; then done;
-}
-action def Process {
-    first start;
-    then action prep { in ready : Boolean; }
-    then action ship : Travel;
-    then done;
-}
-succession s1 first a then b;
-
-state def EngineStates {
-    action initial : Initialize;
-    state off; state starting;
-    state on { entry MonitorTemp; do ProvidePower; exit ApplyBrake; }
-    transition initial then off;
-    transition off_to_on first off accept Start then on;
-}
-exhibit state engineStates : EngineStates;
-```
-
-Modifiers: `public` / `private` / `protected` (visibility), `in` / `out` /
-`inout` (direction), `derived` / `abstract` / `constant` / `ref` (feature).
-
-Relationships: `: T` (typing), `:>` or `specializes` (specialization),
-`:>>` or `redefines` (redefinition), `[lo..hi]` (multiplicity).
-
-Expressions: integer / real / string / boolean literals, qualified-name
-references, `+` `-` `*` `/`, `==` `!=` `<` `<=` `>` `>=`, `and` / `or`
-(SysML keyword forms), prefix `-` and `!`, parenthesized grouping.
-
-Spec-derived validation rules (§8.3 of the SysML v2 spec):
-
-- Every `:>>` redefinition must point at a real feature in the
-  redefining type's supertype chain
-- Connection ends must reference port-typed features
-- Flow direction must be source-out → target-in (with conjugation flip)
-- Flow definitions may have at most two ends
-- Six referential rules from §8.3.6.4, §8.3.7.2, §8.3.7.3, §8.3.12.6,
-  §8.3.16.2 — directed/end/top-level usages and PortUsages outside
-  port contexts are inferred referential; AttributeUsages and
-  AttributeDefinition features are unconditionally referential
-- Constant / derived attributes must have an initializer / derivation
-- Enum value initializers are tags within an enum def; user-written
-  enum-typed attributes still require type-compatible default values
-- Constraint def bodies must be Boolean expressions (typechecker)
-- Constraint usages (`assert/assume/require constraint`) must reference
-  a constraint def; requirement usages (`require requirement`) must
-  reference a requirement def
-- Constraint and requirement usages require an explicit assertion
-  prefix (`assert` / `assume` / `require`); bare usages are reserved
-
-## Directory layout
+### Directory layout
 
 ```
-main.c                      CLI entry point and flag dispatch
-include/                    public + private headers
-  ast.h                       Node tree definition (15 kinds)
-  scanner.h                   tokens, scanner API
-  parser.h                    public parse() entry
-  parser_internal.h           shared between the three parser files
-  resolver.h                  public resolveProgram() entry
-  resolver_internal.h         shared between the two resolver files
-  typechecker.h               typecheckProgram() entry
-  redefchecker.h              checkRedefinitions() entry
-  connectchecker.h            checkConnections() entry
-  referentialchecker.h        checkReferential() entry
-  builtin.h                   synthetic ScalarValues stdlib
-  codegen_json.h              --emit-json back-end
-  codegen_sysml.h             --emit-sysml back-end (round-trip)
-src/
-  scanner.c                   lexer, 68 token types
-  parser_common.c             Parser state, token machinery, multiplicity
-  parser_expr.c               Pratt expression parser
-  parser_decl.c               declaration grammar, dispatch
-  ast.c                       node construction, list helpers, astPrint
-  resolver_scope.c            Scope/Symbol primitives, lookups
-  resolver.c                  resolution drivers, walker
-  typechecker.c               expression typing + relationship validation
-  redefchecker.c              redef target chain validation
-  connectchecker.c            connection/flow direction rules
-  referentialchecker.c        the six referential-inference rules
-  builtin.c                   ScalarValues package construction
-  codegen_json.c              JSON emission
-  codegen_sysml.c             canonical SysML pretty-printer
-test/
-  *.sysml                     positive tests (must compile cleanly)
-  bad/*.sysml                 negative tests (must report ≥1 error)
-tools/
-  sml2c_to_graphsml.py        Python adapter: --emit-json → graphsml2 elements
-  render_drawio.py            wires the adapter to drawpyo + graphsml2
-verify-tokens.sh              checks every TOKEN_X used in src/ is declared
-Makefile                      build, test, test-graphsml targets
+.
+├── main.c                    program entry point + flag parsing
+├── include/
+│   ├── ast.h                 Node tagged-union; NodeList; QualifiedName
+│   ├── ast_walk.h            visitor framework (used by every pass)
+│   ├── codegen_*.h           per-back-end interface
+│   ├── parser_internal.h     parser/scanner shared state
+│   ├── resolver.h            public resolver entry
+│   ├── resolver_internal.h   scope/lookup primitives, used by passes
+│   └── scanner.h             TOKEN_* enum, scanner state
+├── src/
+│   ├── scanner.c             single-pass lexer over a contiguous buffer
+│   ├── parser_common.c       token machinery, qualifiedName helpers
+│   ├── parser_decl.c         declaration grammar (the bulk)
+│   ├── parser_expr.c         Pratt parser for expressions
+│   ├── ast.c                 Node arena; print/free; visitor dispatch
+│   ├── ast_walk.c            visitor framework body
+│   ├── builtin.c             synthetic stdlib (ScalarValues etc.)
+│   ├── resolver.c            walk + resolveQualifiedName
+│   ├── resolver_scope.c      Scope/Symbol primitives + lookups
+│   ├── typechecker.c         bottom-up type inference
+│   ├── redefchecker.c        :>> validation against supertype chains
+│   ├── connectchecker.c      port direction / conjugation parity
+│   ├── referentialchecker.c  §8.3 reference-inference rules
+│   ├── codegen_json.c        --emit-json
+│   ├── codegen_sysml.c       --emit-sysml (round-trip)
+│   └── codegen_c.c           --emit-c (typed-AST first slice)
+├── test/
+│   ├── *.sysml               positive tests (every file must parse and
+│   │                         pass the full pipeline)
+│   └── bad/*.sysml           negative tests (every file must be
+│                             rejected somewhere in the pipeline)
+├── tools/
+│   └── sml2c_to_graphsml.py  drawio adapter over --emit-json output
+├── verify-tokens.sh          parser ↔ scanner token-symbol drift check
+├── Makefile                  build + sweep gates
+├── CHANGELOG.md              per-version notes
+├── chat_history.md           project narrative
+└── README.md                 this file
 ```
 
-## Pipeline detail
+### Conventions
 
-**Scanner** (clox-style): one-shot `scanToken()` pulled lazily by the
-parser, tokens hold `(start, length)` pointers into the source buffer
-with no allocation.  68 token types covering punctuation, keywords,
-literals, doc-comment bodies, and a stash for block-comment bodies
-(consumed by `comment` declarations).
+- **Single contiguous source buffer.**  Tokens are
+  `(start, length)` pointers into it; lexemes never get copied.
+  Same idiom as clox's scanner.
+- **AST as IR.**  No separate IR layer.  Passes attach inferred info
+  to existing nodes (`Node.inferredType`, `qualifiedName.resolved`,
+  `usage.isReference`) rather than rewriting tree shape.
+- **Source-vs-inferred flag separation.**  Where a pass mutates a
+  flag the source level cares about, we keep both:
+  `usage.isReference` (post-inference) and
+  `usage.isReferenceExplicit` (source-given).  The SysML emitter
+  reads the latter so round-trip stays clean.
+- **Skip-on-uncertainty for codegen.**  `--emit-c` skips any
+  definition whose lowering isn't unambiguously correct, with a
+  `/* skipped: NAME (reason) */` line so the gap is visible.
+- **Visitor framework.**  `ast_walk.c` exposes a single per-NodeKind
+  switch; the per-pass logic plugs in via callbacks.  Adding a new
+  node kind means touching the visitor, not five duplicated
+  switches.
 
-**Parser**: hand-written recursive descent for declarations, Pratt
-parser for expressions.  Panic-mode error recovery — first error in
-a rule sets `panicMode`, the top-level loop synchronizes at safe
-restart points.  Split across three files with a private internal
-header.
+## Test gates
 
-**Resolver**: two-phase scoped symbol table.  Phase 1 declares every
-named child member, phase 2 walks references and resolves them through
-the scope chain.  Multi-segment names walk member-of-type with a
-synthetic stdlib (ScalarValues) injected at the root.  Aliases are
-dereferenced at the lookup boundary so the AST keeps the alias node
-but consumers see through to the target.  Conjugation parity is
-tracked along multi-segment chains so the connection checker can flip
-port directions correctly through `~Sensor`-typed features.
+`make sweep` runs all of these and reports a unified pass/fail:
 
-**Typechecker**: every expression typed bottom-up; attribute defaults
-checked against declared types; enum-tag literals relaxed only when
-inside an enum def body.  `constant` and `derived` modifiers required
-to have a value / derivation expression.
+| Gate              | What it checks                                         |
+|-------------------|--------------------------------------------------------|
+| `verify-tokens`   | every `TOKEN_*` referenced in `src/` is declared in `include/scanner.h` |
+| `test-all`        | every `test/*.sysml` parses and passes the pipeline; every `test/bad/*.sysml` is rejected somewhere |
+| `test-c`          | every test piped through `--emit-c \| cc -fsyntax-only` produces compilable C |
+| `test-graphsml`   | every test's `--emit-json` output runs cleanly through the Python drawio adapter |
+| `test-ptc`        | the OMG SysML PTC reference file: parser-only is a hard 0-error gate; default-mode is tracked against `PTC_BASELINE` (currently 15) |
 
-**Redefchecker**: every `:>>` validated against the supertype chain
-of the redefining type's owner.  Multi-segment qualifiers must match
-a real path; type narrowing checked when the qualifier is fully
-validated.
-
-**Connectchecker**: connection ends must be port-typed; flow source
-must be `out`/`inout` and target `in`/`inout`; conjugation flips the
-effective direction.  `connect a to b` and `flow from a to b` both
-go through this pass.
-
-**Referentialchecker**: six rules from the spec — directed usages,
-end features, top-level usages, AttributeUsages, AttributeDefinition
-features, and non-port nested usages of a port — are inferred
-referential.  Flow definitions may have at most two ends.
-
-**Back-ends**: `astPrint` emits a tree-shaped human-readable summary;
-`emitJson` emits the AST as JSON; `emitSysml` round-trips canonical
-SysML source.  All 19 positive tests round-trip to byte-identical
-JSON ASTs through the SysML emitter.
-
-## Tests
-
-There are three test layers:
-
-1. **Strict pass/fail** (`make test-all`): every `test/*.sysml` must
-   compile cleanly; every `test/bad/*.sysml` must report at least one
-   error.  42 tests.
-
-2. **graphsml adapter** (`make test-graphsml`): every `test/*.sysml`
-   converts cleanly through the Python adapter.  21 tests.
-
-3. **Round-trip** (manual via shell): every `test/*.sysml` emits SysML
-   via `--emit-sysml`, re-parses, and the two ASTs are byte-identical
-   in JSON.  21 tests.
-
-## Drawio integration
-
-`tools/sml2c_to_graphsml.py` converts `--emit-json` output to wrapper
-objects that match the protocol `graphsml2.Classifier` expects.  Zero
-runtime dependencies for the adapter itself; the optional render
-script (`tools/render_drawio.py`) imports `drawpyo` and `graphsml2`
-to produce a `.drawio` file.
+The PTC reference file is the project's external quality bar — a
+1580-line industry-standard SysML model.  Override:
 
 ```
-sml2c --emit-json file.sysml | python tools/sml2c_to_graphsml.py - | head
-sml2c --emit-json file.sysml | python tools/render_drawio.py - out.drawio
+make test-ptc PTC_FILE=/path/to/your.sysml PTC_BASELINE=N
 ```
+
+to track a different reference, or to update the baseline after a
+deliberate improvement / acceptable regression.
 
 ## Status
 
-v0.10.  A second long-tail pass against the PTC reference file using
-the **default** invocation (full pipeline: parse + resolve +
-typecheck + redefcheck + connectcheck + refcheck).  The 49-error
-count from v0.9 was measured under `--no-resolve --no-typecheck
---no-redefcheck --no-connectcheck --no-refcheck`, which silenced
-resolution-level errors that surface earlier.  v0.10 fixes the
-default-pipeline view: **46 → 19 errors** on the reference file.
+v0.21.  All sweep gates green:
 
-Adds:
+```
+$ make sweep
+==> verify-tokens
+OK: all 132 referenced tokens are declared.
+==> test-all (strict)
+  73 passed, 0 failed
+==> test-c (cc -fsyntax-only)
+  C codegen: 46 passed, 0 failed
+==> test-graphsml
+  graphsml adapter: 46 passed, 0 failed
+==> test-ptc
+  PTC: parser=0, default=15 (baseline 15)
 
-**Parser holes filled:**
-- Bare-form features `name :> X = expr;` with no kind keyword and no
-  modifier (`distancePerVolume :> scalarQuantities = ...;`,
-  `kpl : DerivedUnit = km / L;`).  Common in derived-quantity
-  packages.
-- `parallel` on state usages (was action-only) — silently consumed.
-- Lifecycle actions with bodies no longer require trailing `;`:
-  `do senseTemperature { out temp; }` ends at the `}`.
-- Attributes can carry inline bodies for inherited-feature overrides:
-  `attribute spatialCF : Box[1] { :>> mRefs = (m, m, m); }`.
-- Standalone metadata blocks as the only member of a usage body:
-  `part bumper { @Safety { isMandatory = true; } }`.
-- Anonymous-by-`=` usages (`in item = expr;`) and anonymous-by-
-  `default` (`attribute = default expr;`).
-- `perform action X { ... }` accepts inline bodies with member
-  declarations.
-- Allocation usages with `allocate` clauses:
-  `allocation X : T allocate Y to Z { ... }`.
-- `message of <name> : <Type> from a to b;` parses the optional name
-  separately from the type.
+sweep: all gates green
+```
 
-**Test bookkeeping:**
-- `test/bad/BadParallelState.sysml` → `test/ParallelState.sysml`
-  (the rule it tested is invalidated by v0.10's `parallel` acceptance).
-- New `test/LongTail2.sysml` exercising the above.
-
-**Engineering:**
-- Forward declarations for `skipBracedBlock` and
-  `skipMetadataPrefix` moved to the top of `parser_decl.c` so early
-  helpers can call them without implicit-decl warnings.
-
-**Cumulative reduction since v0.2: 564 → 19 (97%) on the default
-pipeline.**  The remaining ~19 errors are concentrated in `subject`-
-statement variants (`subject = X`, `subject {body}`, `subject X[n]`),
-the `assert <ref>;` form without explicit `constraint`/`requirement`
-keyword, the succession `... flow ...` and `... accept ...`
-continuations, and a batch of viewpoint keywords (`verify`, `frame`,
-`stakeholder`, `render`, `expose`).
-
-The cross-cutting tax this turn: **1 file** (just `parser_decl.c`).
-The fixes were all parser-only — no new tokens, no new DefKinds, no
-new AST shapes.  This is the leanest turn so far on per-feature edit
-count, which validates the hypothesis that we're past the structural-
-extension phase and into pure parser-coverage tightening.
+The current focus is closing the remaining 15 PTC default-mode errors
+(allocation-source qnames, send-action parameters, state-machine
+trigger references, and `:>` inheritance for ports), then continuing
+the C codegen buildout that started in v0.15 (calc defs to functions,
+specialization to struct embedding, default-value initializers).
 
 ## License & origin
 
-Written collaboratively by Claude (Anthropic) and the project author over
-multiple sessions.  Style follows Bob Nystrom's *Crafting Interpreters*
-clox idioms.
+Written collaboratively by Claude (Anthropic) and the project author
+over multiple sessions.  Style follows Bob Nystrom's
+*Crafting Interpreters* clox idioms.

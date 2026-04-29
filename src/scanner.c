@@ -243,6 +243,11 @@ static TokenType identifierType(void) {
     KW("meta",        TOKEN_META);
     KW("default",     TOKEN_DEFAULT);
     KW("analysis",    TOKEN_ANALYSIS);
+    KW("verify",      TOKEN_VERIFY);
+    KW("frame",       TOKEN_FRAME);
+    KW("stakeholder", TOKEN_STAKEHOLDER);
+    KW("render",      TOKEN_RENDER);
+    KW("expose",      TOKEN_EXPOSE);
 
     #undef KW
     return TOKEN_IDENTIFIER;
@@ -569,6 +574,11 @@ const char* tokenTypeName(TokenType type) {
     case TOKEN_META:           return "META";
     case TOKEN_DEFAULT:        return "DEFAULT";
     case TOKEN_ANALYSIS:       return "ANALYSIS";
+    case TOKEN_VERIFY:         return "VERIFY";
+    case TOKEN_FRAME:          return "FRAME";
+    case TOKEN_STAKEHOLDER:    return "STAKEHOLDER";
+    case TOKEN_RENDER:         return "RENDER";
+    case TOKEN_EXPOSE:         return "EXPOSE";
     case TOKEN_ERROR:          return "ERROR";
     case TOKEN_EOF:            return "EOF";
     }

@@ -4,6 +4,74 @@
 #include <string.h>
 #include "ast.h"
 
+/* ---------------------------------------------------- DefKind table */
+
+/* Designated initializers keyed by enum constant — order-independent
+ * and resilient against enum reordering.  Anything missing produces an
+ * all-NULL row, which the accessors detect and report.               */
+static const DefKindInfo g_defKindTable[DEF_KIND_COUNT] = {
+    [DEF_PART]        = { "part",              "PartDef",        "Part",         "PartDef",        "part usage"        },
+    [DEF_PORT]        = { "port",              "PortDef",        "Port",         "PortDef",        "port usage"        },
+    [DEF_INTERFACE]   = { "interface",         "InterfaceDef",   "Interface",    "InterfaceDef",   "interface usage"   },
+    [DEF_ITEM]        = { "item",              "ItemDef",        "Item",         "ItemDef",        "item usage"        },
+    [DEF_CONNECTION]  = { "connection",        "ConnectionDef",  "Connection",   "ConnectionDef",  "connection usage"  },
+    [DEF_FLOW]        = { "flow",              "FlowDef",        "Flow",         "FlowDef",        "flow usage"        },
+    [DEF_END]         = { "end",               "?End",           "End",          "End",            "end declaration"   },
+    [DEF_DATATYPE]    = { "datatype",          "DataTypeDef",    "DataType",     "DataTypeDef",    "datatype usage"    },
+    [DEF_ENUM]        = { "enum",              "EnumDef",        "EnumValue",    "EnumDef",        "enum value"        },
+    [DEF_REFERENCE]   = { "ref",               "?ReferenceDef",  "Reference",    "ReferenceUsage", "reference usage"   },
+    [DEF_CONSTRAINT]  = { "constraint",        "ConstraintDef",  "Constraint",   "ConstraintDef",  "constraint usage"  },
+    [DEF_REQUIREMENT] = { "requirement",       "RequirementDef", "Requirement",  "RequirementDef", "requirement usage" },
+    [DEF_SUBJECT]     = { "subject",           "?SubjectDef",    "Subject",      "Subject",        "subject"           },
+    [DEF_ACTION]      = { "action",            "ActionDef",      "Action",       "ActionDef",      "action usage"      },
+    [DEF_STATE]       = { "state",             "StateDef",       "State",        "StateDef",       "state usage"       },
+    [DEF_CALC]        = { "calc",              "CalcDef",        "Calc",         "CalcDef",        "calc usage"        },
+    [DEF_ATTRIBUTE_DEF]={ "attribute",         "AttributeDef",   "AttributeUse", "AttributeDef",   "attribute def"     },
+    [DEF_OCCURRENCE]  = { "occurrence",        "OccurrenceDef",  "Occurrence",   "OccurrenceDef",  "occurrence usage"  },
+    [DEF_EVENT]       = { "event occurrence",  "EventDef",       "Event",        "EventDef",       "event usage"       },
+    [DEF_INDIVIDUAL]  = { "individual",        "IndividualDef",  "Individual",   "IndividualDef",  "individual usage"  },
+    [DEF_SNAPSHOT]    = { "snapshot",          "SnapshotDef",    "Snapshot",     "SnapshotDef",    "snapshot usage"    },
+    [DEF_TIMESLICE]   = { "timeslice",         "TimesliceDef",   "Timeslice",    "TimesliceDef",   "timeslice usage"   },
+    [DEF_ALLOCATION]  = { "allocation",        "AllocationDef",  "Allocation",   "AllocationDef",  "allocation usage"  },
+    [DEF_VIEW]        = { "view",              "ViewDef",        "View",         "ViewDef",        "view usage"        },
+    [DEF_VIEWPOINT]   = { "viewpoint",         "ViewpointDef",   "Viewpoint",    "ViewpointDef",   "viewpoint usage"   },
+    [DEF_RENDERING]   = { "rendering",         "RenderingDef",   "Rendering",    "RenderingDef",   "rendering usage"   },
+    [DEF_CONCERN]     = { "concern",           "ConcernDef",     "Concern",      "ConcernDef",     "concern usage"     },
+    [DEF_VARIANT]     = { "variant",           "VariantDef",     "Variant",      "VariantDef",     "variant usage"     },
+    [DEF_VARIATION]   = { "variation",         "VariationDef",   "Variation",    "VariationDef",   "variation usage"   },
+    [DEF_ACTOR]       = { "actor",             "ActorDef",       "Actor",        "ActorDef",       "actor usage"       },
+    [DEF_USE_CASE]    = { "use case",          "UseCaseDef",     "UseCase",      "UseCaseDef",     "use case usage"    },
+    [DEF_INCLUDE]     = { "include",           "IncludeDef",     "Include",      "IncludeDef",     "include usage"     },
+    [DEF_MESSAGE]     = { "message",           "MessageDef",     "Message",      "MessageDef",     "message usage"     },
+    [DEF_METADATA]    = { "metadata",          "MetadataDef",    "Metadata",     "MetadataDef",    "metadata usage"    },
+    [DEF_VERIFICATION]= { "verification",      "VerificationDef","Verification", "VerificationDef","verification usage"},
+    [DEF_OBJECTIVE]   = { "objective",         "ObjectiveDef",   "Objective",    "ObjectiveDef",   "objective usage"   },
+    [DEF_SATISFY]     = { "satisfy",           "SatisfyDef",     "Satisfy",      "SatisfyDef",     "satisfy usage"     },
+    [DEF_ANALYSIS]    = { "analysis",          "AnalysisDef",    "Analysis",     "AnalysisDef",    "analysis usage"    },
+    [DEF_VERIFY]      = { "verify",            "VerifyDef",      "Verify",       "VerifyDef",      "verify usage"      },
+    [DEF_FRAME]       = { "frame",             "FrameDef",       "Frame",        "FrameDef",       "frame usage"       },
+    [DEF_STAKEHOLDER] = { "stakeholder",       "StakeholderDef", "Stakeholder",  "StakeholderDef", "stakeholder usage" },
+    [DEF_RENDER]      = { "render",            "RenderDef",      "Render",       "RenderDef",      "render usage"      },
+    [DEF_EXPOSE]      = { "expose",            "ExposeDef",      "Expose",       "ExposeDef",      "expose usage"      },
+};
+
+const DefKindInfo* defKindInfo(DefKind k) {
+    if ((int)k < 0 || (int)k >= DEF_KIND_COUNT) return NULL;
+    const DefKindInfo* info = &g_defKindTable[k];
+    /* Detect missing rows — a freshly added DefKind without a
+     * corresponding table entry will trip this on first lookup.    */
+    if (info->keyword == NULL) {
+        fprintf(stderr, "internal: DefKind %d has no metadata entry\n", (int)k);
+        exit(70);
+    }
+    return info;
+}
+
+const char* defKindKeyword   (DefKind k) { return defKindInfo(k)->keyword;       }
+const char* defKindDefLabel  (DefKind k) { return defKindInfo(k)->defLabel;      }
+const char* defKindUsageLabel(DefKind k) { return defKindInfo(k)->usageLabel;    }
+const char* defKindDescribe  (DefKind k) { return defKindInfo(k)->describeUsage; }
+
 /* ----------------------------------------------------------- alloc */
 
 Node* astMakeNode(NodeKind kind, int line) {
@@ -145,83 +213,11 @@ static void emitFeatureModifiers(bool isDerived, bool isAbstract,
 }
 
 /* Map a DefKind to the human-readable label used in the AST dump.
- * The two arrays preserve the older "PartDef" / "Part" output that
- * existing test files compare against.                             */
+ * Sources both names from g_defKindTable, so adding a new DefKind no
+ * longer requires touching this file.                                */
 static const char* kindLabel(DefKind k, bool isDefinition) {
-    static const char* defs[] = {
-        "PartDef", "PortDef", "InterfaceDef",
-        "ItemDef", "ConnectionDef", "FlowDef",
-        "?EndDef",  /* ends have no def form; sentinel for misuse  */
-        "DataTypeDef",
-        "EnumDef",
-        "?ReferenceDef", /* references have no def form              */
-        "ConstraintDef",
-        "RequirementDef",
-        "?SubjectDef",  /* subjects have no def form; sentinel        */
-        "ActionDef",
-        "StateDef",
-        "CalcDef",
-        "AttributeDef",
-        "OccurrenceDef",
-        "EventDef",
-        "IndividualDef",
-        "SnapshotDef",
-        "TimesliceDef",
-        "AllocationDef",
-        "ViewDef",
-        "ViewpointDef",
-        "RenderingDef",
-        "ConcernDef",
-        "VariantDef",
-        "VariationDef",
-        "ActorDef",
-        "UseCaseDef",
-        "IncludeDef",
-        "MessageDef",
-        "MetadataDef",
-        "VerificationDef",
-        "ObjectiveDef",
-        "SatisfyDef",
-        "AnalysisDef"
-    };
-    static const char* uses[] = {
-        "Part", "Port", "Interface",
-        "Item", "Connection", "Flow", "End",
-        "DataType",  /* not produced by the parser, used by stdlib  */
-        "EnumValue",
-        "Reference",
-        "Constraint",
-        "Requirement",
-        "Subject",
-        "Action",
-        "State",
-        "Calc",
-        "AttributeUse",
-        "Occurrence",
-        "Event",
-        "Individual",
-        "Snapshot",
-        "Timeslice",
-        "Allocation",
-        "View",
-        "Viewpoint",
-        "Rendering",
-        "Concern",
-        "Variant",
-        "Variation",
-        "Actor",
-        "UseCase",
-        "Include",
-        "Message",
-        "Metadata",
-        "Verification",
-        "Objective",
-        "Satisfy",
-        "Analysis"
-    };
-    int idx = (int)k;
-    if (idx < 0 || idx >= (int)(sizeof(defs)/sizeof(defs[0]))) return "?";
-    return isDefinition ? defs[idx] : uses[idx];
+    const DefKindInfo* info = defKindInfo(k);
+    return isDefinition ? info->defLabel : info->usageLabel;
 }
 
 /* Emit a comma-separated list of qualified names with a leading prefix
@@ -388,6 +384,7 @@ static void printNode(const Node* n, int depth) {
 
     case NODE_ATTRIBUTE:
         emitVisibility(n->as.attribute.visibility);
+        emitDirection(n->as.attribute.direction);
         emitFeatureModifiers(n->as.attribute.isDerived,  n->as.attribute.isAbstract,
                              n->as.attribute.isConstant, n->as.attribute.isReference);
         printf("Attribute '"); emitToken(n->as.attribute.name); printf("'");
@@ -598,3 +595,32 @@ static void printNode(const Node* n, int depth) {
 }
 
 void astPrint(const Node* root) { printNode(root, 0); }
+
+/* ---- name / token utilities ------------------------------------- *
+ *
+ * These two functions are the AST-side counterpart to the parser's
+ * symbol-table machinery: they let any pass ask "what's this node
+ * called?" and "are these two tokens the same name?" without
+ * pulling in resolver internals.  Lifted out of resolver_scope.c
+ * (and an identical static copy in redefchecker.c) so every later
+ * pass can share one implementation.                                */
+
+bool tokensEqual(Token a, Token b) {
+    if (a.length != b.length) return false;
+    return memcmp(a.start, b.start, (size_t)a.length) == 0;
+}
+
+Token nodeName(const Node* n) {
+    static const Token empty = {0};
+    if (!n) return empty;
+    switch (n->kind) {
+    case NODE_PACKAGE:
+    case NODE_DEFINITION: return n->as.scope.name;
+    case NODE_USAGE:      return n->as.usage.name;
+    case NODE_ATTRIBUTE:  return n->as.attribute.name;
+    case NODE_ALIAS:      return n->as.alias.name;
+    case NODE_COMMENT:    return n->as.comment.name;     /* may be empty */
+    case NODE_DEPENDENCY: return n->as.dependency.name;  /* may be empty */
+    default:              return empty;
+    }
+}

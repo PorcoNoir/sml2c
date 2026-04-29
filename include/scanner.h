@@ -178,6 +178,13 @@ typedef enum {
     TOKEN_DEFAULT,          /* `attribute X default <expr>;` — keyword form of `=` */
     TOKEN_ANALYSIS,         /* `analysis name { ... }` */
 
+    /* Tier 4 keywords — viewpoint frames, verification, view rendering. */
+    TOKEN_VERIFY,           /* `verify <ref> { body }`            */
+    TOKEN_FRAME,            /* `frame concern X;`                 */
+    TOKEN_STAKEHOLDER,      /* `stakeholder se:T;`                */
+    TOKEN_RENDER,           /* `render asTreeDiagram;`            */
+    TOKEN_EXPOSE,           /* `expose <qname>::**;`              */
+
     /* Special -------------------------------------------------------- */
     TOKEN_ERROR,
     TOKEN_EOF

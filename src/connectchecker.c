@@ -20,6 +20,7 @@
 #include <stdarg.h>
 
 #include "connectchecker.h"
+#include "ast_walk.h"
 
 static int errorCount = 0;
 
@@ -59,48 +60,7 @@ static bool isPortLike(const Node* n) {
 static const char* describeNode(const Node* n) {
     if (!n) return "<unresolved reference>";
     switch (n->kind) {
-    case NODE_USAGE:
-        switch (n->as.usage.defKind) {
-        case DEF_PART:       return "part usage";
-        case DEF_PORT:       return "port usage";       /* shouldn't fail */
-        case DEF_INTERFACE:  return "interface usage";
-        case DEF_ITEM:       return "item usage";
-        case DEF_CONNECTION: return "connection usage";
-        case DEF_FLOW:       return "flow usage";
-        case DEF_END:        return "end declaration";
-        case DEF_DATATYPE:   return "datatype usage";
-        case DEF_ENUM:       return "enum value";
-        case DEF_REFERENCE:  return "reference usage";
-        case DEF_CONSTRAINT: return "constraint usage";
-        case DEF_REQUIREMENT:return "requirement usage";
-        case DEF_SUBJECT:    return "subject";
-        case DEF_ACTION:     return "action usage";
-        case DEF_STATE:      return "state usage";
-        case DEF_CALC:       return "calc usage";
-        case DEF_ATTRIBUTE_DEF: return "attribute def";
-        case DEF_OCCURRENCE: return "occurrence usage";
-        case DEF_EVENT:      return "event usage";
-        case DEF_INDIVIDUAL: return "individual usage";
-        case DEF_SNAPSHOT:   return "snapshot usage";
-        case DEF_TIMESLICE:  return "timeslice usage";
-        case DEF_ALLOCATION: return "allocation usage";
-        case DEF_VIEW:       return "view usage";
-        case DEF_VIEWPOINT:  return "viewpoint usage";
-        case DEF_RENDERING:  return "rendering usage";
-        case DEF_CONCERN:    return "concern usage";
-        case DEF_VARIANT:    return "variant usage";
-        case DEF_VARIATION:  return "variation usage";
-        case DEF_ACTOR:      return "actor usage";
-        case DEF_USE_CASE:   return "use case usage";
-        case DEF_INCLUDE:    return "include usage";
-        case DEF_MESSAGE:    return "message usage";
-        case DEF_METADATA:   return "metadata usage";
-        case DEF_VERIFICATION: return "verification usage";
-        case DEF_OBJECTIVE:  return "objective usage";
-        case DEF_SATISFY:    return "satisfy usage";
-        case DEF_ANALYSIS:   return "analysis usage";
-        }
-        return "usage";
+    case NODE_USAGE:      return defKindDescribe(n->as.usage.defKind);
     case NODE_ATTRIBUTE:  return "attribute";
     case NODE_DEFINITION: return "definition";
     case NODE_PACKAGE:    return "package";
@@ -175,54 +135,34 @@ static void checkEnd(const Node* endRef, EndRole role) {
 }
 
 /* Walk the AST. */
-static void walk(const Node* n) {
-    if (!n) return;
-    switch (n->kind) {
-    case NODE_PROGRAM:
-    case NODE_PACKAGE:
-    case NODE_DEFINITION:
-        for (int i = 0; i < n->as.scope.memberCount; i++) {
-            walk(n->as.scope.members[i]);
-        }
-        break;
-
-    case NODE_USAGE: {
-        const NodeList* ends = &n->as.usage.ends;
-        if (ends->count > 0) {
-            bool isFlow = (n->as.usage.defKind == DEF_FLOW
-                        || n->as.usage.defKind == DEF_MESSAGE);
-            /* `bind X = Y;`, `allocate X to Y;`, and `satisfy X by Y;`
-             * relate arbitrary model elements (not necessarily ports),
-             * so skip the port check for these connection variants.    */
-            bool skipPortCheck = n->as.usage.isBind
-                              || n->as.usage.isAllocate
-                              || n->as.usage.defKind == DEF_SATISFY;
-            if (!skipPortCheck) {
-                /* Parser produces exactly 2 ends; defensive code handles
-                 * other counts by treating extras as connection-style. */
-                for (int i = 0; i < ends->count; i++) {
-                    EndRole role;
-                    if (isFlow && i == 0)      role = END_FLOW_FROM;
-                    else if (isFlow && i == 1) role = END_FLOW_TO;
-                    else                       role = END_CONNECT;
-                    checkEnd(ends->items[i], role);
-                }
-            }
-        }
-        for (int i = 0; i < n->as.usage.memberCount; i++) {
-            walk(n->as.usage.members[i]);
-        }
-        break;
-    }
-
-    default:
-        break;
+static void onUsage(AstWalkCtx* ctx, Node* n) {
+    (void)ctx;
+    const NodeList* ends = &n->as.usage.ends;
+    if (ends->count == 0) return;
+    bool isFlow = (n->as.usage.defKind == DEF_FLOW
+                || n->as.usage.defKind == DEF_MESSAGE);
+    /* `bind X = Y;`, `allocate X to Y;`, and `satisfy X by Y;` relate
+     * arbitrary model elements (not necessarily ports), so skip the
+     * port check for these connection variants.                     */
+    bool skipPortCheck = n->as.usage.isBind
+                      || n->as.usage.isAllocate
+                      || n->as.usage.defKind == DEF_SATISFY;
+    if (skipPortCheck) return;
+    /* Parser produces exactly 2 ends; defensive code handles other
+     * counts by treating extras as connection-style.                */
+    for (int i = 0; i < ends->count; i++) {
+        EndRole role;
+        if (isFlow && i == 0)      role = END_FLOW_FROM;
+        else if (isFlow && i == 1) role = END_FLOW_TO;
+        else                       role = END_CONNECT;
+        checkEnd(ends->items[i], role);
     }
 }
 
 bool checkConnections(const Node* program) {
     errorCount = 0;
-    walk(program);
+    static const AstVisitor v = { .onUsageEnter = onUsage };
+    astWalkProgram((Node*)program, &v, NULL);
     if (errorCount > 0) {
         fprintf(stderr, "Connection checking failed with %d error%s.\n",
                 errorCount, errorCount == 1 ? "" : "s");
