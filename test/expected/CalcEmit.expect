@@ -1,0 +1,4 @@
+Square(3) = 9
+Square(5) = 25
+Scale(10, 2.5) = 25
+SumOfSquares(3, 4) = 25

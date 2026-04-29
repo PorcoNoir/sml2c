@@ -9,6 +9,85 @@ the working tree at the time of release.
 
 ---
 
+## v0.22 — Calc defs to C functions
+
+First step of the executable-target pivot from
+`design/c-codegen.md`.  Every emittable `calc def F` lowers to a free
+C function; calls to calc defs in expressions lower to bare-name C
+function calls; intermediate `attribute` body members become local C
+variables.
+
+```sysml
+calc def Scale {
+    in mass : Real;
+    in factor : Real;
+    attribute scaled = mass * factor;
+    return result : Real = scaled;
+}
+calc def SumOfSquares {
+    in a : Real;
+    in b : Real;
+    return total : Real = Square(a) + Square(b);
+}
+```
+
+emits
+
+```c
+double Scale(double mass, double factor);
+double SumOfSquares(double a, double b);
+
+double Scale(double mass, double factor) {
+    double scaled = (mass * factor);
+    return scaled;
+}
+
+double SumOfSquares(double a, double b) {
+    return (Square(a) + Square(b));
+}
+```
+
+Forward-declare-then-define structure means mutual recursion works.
+Intermediate attributes without a declared type fall back to
+`Node.inferredType` from the typechecker, which is what makes
+`attribute scaled = mass * factor;` (no `: Real`) lower correctly.
+
+**Side effect.**  Top-level `static const` attributes whose default
+contains a function call now skip with
+`/* skipped: NAME (non-const initializer — needs v0.23 init function) */`
+because C doesn't allow function calls in const initializers.  v0.23
+will lift these into a generated `__sml2c_init` function.
+
+**New gate: `make test-c-run`.**  For each `test/<name>.sysml` with a
+companion `test/<name>.driver.c` and `test/expected/<name>.expect`,
+the gate compiles + links + runs + diffs.  This is the runtime-level
+equivalent of `make test-c` (which only checks syntactic validity).
+Wired into `make sweep`.
+
+```
+$ make sweep
+==> verify-tokens
+OK: all 132 referenced tokens are declared.
+==> test-all (strict)
+  73 passed, 0 failed
+==> test-c (cc -fsyntax-only)
+  C codegen: 46 passed, 0 failed
+==> test-c-run (cc + ./binary + diff)
+  C runtime: 1 passed, 0 failed
+==> test-graphsml
+  graphsml adapter: 46 passed, 0 failed
+==> test-ptc
+  PTC: parser=0, default=15 (baseline 15)
+
+sweep: all gates green
+```
+
+**Files touched:** `src/codegen_c.c` (+~150 lines), `Makefile` (new
+`test-c-run` target, sweep extended); new `test/CalcEmit.sysml`,
+`test/CalcEmit.driver.c`, `test/expected/CalcEmit.expect`.
+
+---
+
 ## v0.21 — Docs reorganization
 
 Pure documentation churn.  README sliced down to the architectural

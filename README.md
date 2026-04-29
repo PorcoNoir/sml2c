@@ -133,6 +133,7 @@ back-ends to read.
 | `verify-tokens`   | every `TOKEN_*` referenced in `src/` is declared in `include/scanner.h` |
 | `test-all`        | every `test/*.sysml` parses and passes the pipeline; every `test/bad/*.sysml` is rejected somewhere |
 | `test-c`          | every test piped through `--emit-c \| cc -fsyntax-only` produces compilable C |
+| `test-c-run`      | for tests with a companion `<name>.driver.c` and `expected/<name>.expect`: compile + link + run + diff stdout |
 | `test-graphsml`   | every test's `--emit-json` output runs cleanly through the Python drawio adapter |
 | `test-ptc`        | the OMG SysML PTC reference file: parser-only is a hard 0-error gate; default-mode is tracked against `PTC_BASELINE` (currently 15) |
 
@@ -148,7 +149,7 @@ deliberate improvement / acceptable regression.
 
 ## Status
 
-v0.21.  All sweep gates green:
+v0.22.  All sweep gates green:
 
 ```
 $ make sweep
@@ -158,6 +159,8 @@ OK: all 132 referenced tokens are declared.
   73 passed, 0 failed
 ==> test-c (cc -fsyntax-only)
   C codegen: 46 passed, 0 failed
+==> test-c-run (cc + ./binary + diff)
+  C runtime: 1 passed, 0 failed
 ==> test-graphsml
   graphsml adapter: 46 passed, 0 failed
 ==> test-ptc
@@ -166,11 +169,10 @@ OK: all 132 referenced tokens are declared.
 sweep: all gates green
 ```
 
-The current focus is closing the remaining 15 PTC default-mode errors
-(allocation-source qnames, send-action parameters, state-machine
-trigger references, and `:>` inheritance for ports), then continuing
-the C codegen buildout that started in v0.15 (calc defs to functions,
-specialization to struct embedding, default-value initializers).
+The current focus is the executable-target pivot from
+`design/c-codegen.md`: lift `--emit-c` from structural lowering to a
+runnable C program.  v0.22 (calc defs → C functions) shipped; v0.23
+(init functions for part defs + topo-sorted top-level inits) is next.
 
 ## License & origin
 

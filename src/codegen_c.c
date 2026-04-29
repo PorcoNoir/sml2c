@@ -41,6 +41,13 @@ typedef struct {
      * Read by both the field-type mapper (to allow user-typed fields)
      * and the definition-emit hook (to skip cleanly).              */
     EmittableDefs emittable;
+    /* Pre-computed set of every emittable calc def — populated by
+     * collectCalcDefs in a single walk after collectEmittable.  Used
+     * by the prototype + body emission passes; also lets the
+     * visitor's per-definition hook know which calcs were already
+     * emitted by registry passes (so the descent doesn't try to
+     * print them again as skipped).                                  */
+    EmittableDefs calcs;
 } CCtx;
 
 static bool isEmittable(const CCtx* s, const Node* def) {
@@ -260,12 +267,224 @@ static void emitExpr(CCtx* s, const Node* e) {
         fputc(')', s->out);
         break;
     }
+    case NODE_CALL: {
+        /* Lower function-call expressions to bare-name C calls.  Per
+         * Q4 of the codegen design doc, calc-def names are emitted
+         * verbatim with no package mangling — collisions are caught
+         * by the C compiler as duplicate-symbol errors.  Only
+         * single/multi-segment qname callees are supported; anything
+         * else (computed callee, member-access callee) falls through
+         * to the unsupported-expr placeholder.                       */
+        const Node* callee = e->as.call.callee;
+        if (!callee || callee->kind != NODE_QUALIFIED_NAME
+                    || callee->as.qualifiedName.partCount == 0) {
+            fputs("/* unsupported call */ 0", s->out);
+            return;
+        }
+        emitQNameC(s, callee);
+        fputc('(', s->out);
+        for (int i = 0; i < e->as.call.args.count; i++) {
+            if (i > 0) fputs(", ", s->out);
+            emitExpr(s, e->as.call.args.items[i]);
+        }
+        fputc(')', s->out);
+        break;
+    }
     default:
-        /* CALL and MEMBER_ACCESS could be lowered later; for now flag
-         * them so users see what's missing rather than getting silent
-         * `0` placeholders.                                          */
+        /* MEMBER_ACCESS could be lowered later (struct field reads);
+         * for now flag unsupported expression forms so the user sees
+         * what's missing instead of a silent `0` placeholder.         */
         fputs("/* unsupported expr */ 0", s->out);
         break;
+    }
+}
+
+/* ---- calc defs --------------------------------------------------- *
+ *
+ * Per design/c-codegen.md §5 (v0.22): every emittable `calc def F`
+ * lowers to a free C function `R F(T1 a, T2 b, …)`.  Parameters come
+ * from `in`-direction usage members; the return type comes from the
+ * `NODE_RETURN` member's type; the body is the return expression
+ * (plus any intermediate `attribute` members declared as locals).
+ *
+ * Emission order: prototypes first (so mutual recursion works), then
+ * bodies.  Both passes iterate the registry built by
+ * `collectCalcDefs`.                                                  */
+
+/* Registry shape mirrors EmittableDefs above. */
+static bool isCalcRegistered(const CCtx* s, const Node* def) {
+    for (int i = 0; i < s->calcs.count; i++) {
+        if (s->calcs.items[i] == def) return true;
+    }
+    return false;
+}
+
+static void registerCalc(CCtx* s, const Node* def) {
+    if (s->calcs.count == s->calcs.capacity) {
+        int cap = s->calcs.capacity ? s->calcs.capacity * 2 : 8;
+        s->calcs.items = realloc(s->calcs.items,
+                                 (size_t)cap * sizeof(const Node*));
+        s->calcs.capacity = cap;
+    }
+    s->calcs.items[s->calcs.count++] = def;
+}
+
+/* Resolve a usage's first declared type to its target node.  Returns
+ * NULL if the usage has no type, the type ref isn't a qname, or
+ * resolution didn't fill in `resolved`.  Used by the calc-def
+ * predicate and emitter for parameter type lookup.                  */
+static const Node* usageResolvedTypeNode(const Node* usage) {
+    if (!usage || usage->kind != NODE_USAGE) return NULL;
+    const NodeList* types = &usage->as.usage.types;
+    if (types->count == 0) return NULL;
+    const Node* tref = types->items[0];
+    if (!tref || tref->kind != NODE_QUALIFIED_NAME) return NULL;
+    return tref->as.qualifiedName.resolved;
+}
+
+/* Effective C field type for an attribute, falling back to the type
+ * inferred by the typechecker if no `: T` annotation was given.
+ * This makes intermediate `attribute scaled = mass * factor;` inside
+ * a calc-def body work without a redundant `: Real` annotation —
+ * the typechecker has already determined the type from the RHS.    */
+static const char* cTypeOfAttributeFieldOrInferred(const Node* attr) {
+    const char* declared = cTypeOfAttributeField(attr);
+    if (declared) return declared;
+    if (!attr || attr->kind != NODE_ATTRIBUTE) return NULL;
+    const Node* dv = attr->as.attribute.defaultValue;
+    if (!dv || !dv->inferredType) return NULL;
+    return cFieldTypeFor(dv->inferredType);
+}
+
+/* True iff the calc def can be lowered cleanly.  v0.22 accepts:
+ *   - DEF_CALC kind, named
+ *   - exactly one NODE_RETURN with a primitive-typed return + a body
+ *   - zero or more `in`-direction USAGE parameters, primitive-typed
+ *   - zero or more intermediate ATTRIBUTE locals, primitive-typed,
+ *     with default-value initializers
+ *   - no other member kinds                                           */
+static bool calcDefEmittable(const Node* def) {
+    if (!def || def->kind != NODE_DEFINITION) return false;
+    if (def->as.scope.defKind != DEF_CALC) return false;
+    if (def->as.scope.name.length == 0)    return false;
+
+    bool hasReturn = false;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m) continue;
+        if (m->kind == NODE_USAGE) {
+            if (m->as.usage.direction != DIR_IN)  return false;
+            if (m->as.usage.name.length == 0)     return false;
+            if (!cFieldTypeFor(usageResolvedTypeNode(m))) return false;
+        } else if (m->kind == NODE_ATTRIBUTE) {
+            if (m->as.attribute.name.length == 0) return false;
+            if (!cTypeOfAttributeFieldOrInferred(m)) return false;
+            if (!m->as.attribute.defaultValue)    return false;
+        } else if (m->kind == NODE_RETURN) {
+            if (hasReturn) return false;          /* multiple returns */
+            hasReturn = true;
+            if (m->as.ret.types.count != 1)       return false;
+            const Node* tref = m->as.ret.types.items[0];
+            if (!tref || tref->kind != NODE_QUALIFIED_NAME) return false;
+            if (!cFieldTypeFor(tref->as.qualifiedName.resolved)) return false;
+            if (!m->as.ret.defaultValue)          return false;
+        } else {
+            return false;
+        }
+    }
+    return hasReturn;
+}
+
+/* Find the calc's return type's C name.  Caller has already
+ * established calcDefEmittable, so this never returns NULL.         */
+static const char* calcReturnCType(const Node* def) {
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_RETURN) continue;
+        const Node* tref = m->as.ret.types.items[0];
+        return cFieldTypeFor(tref->as.qualifiedName.resolved);
+    }
+    return NULL;
+}
+
+/* Emit `R F(T1 a, T2 b, …)` — the signature, no trailing punctuation.
+ * Used by both the prototype and body emitters.                     */
+static void emitCalcSignature(CCtx* s, const Node* def) {
+    fprintf(s->out, "%s %.*s(", calcReturnCType(def),
+            def->as.scope.name.length, def->as.scope.name.start);
+    bool first = true;
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_USAGE)  continue;
+        if (m->as.usage.direction != DIR_IN) continue;
+        if (!first) fputs(", ", s->out);
+        first = false;
+        const char* pty = cFieldTypeFor(usageResolvedTypeNode(m));
+        fprintf(s->out, "%s %.*s", pty,
+                m->as.usage.name.length, m->as.usage.name.start);
+    }
+    if (first) fputs("void", s->out);  /* zero-param: explicit (void) */
+    fputc(')', s->out);
+}
+
+static void emitCalcDefPrototype(CCtx* s, const Node* def) {
+    emitCalcSignature(s, def);
+    fputs(";\n", s->out);
+}
+
+static void emitCalcDefBody(CCtx* s, const Node* def) {
+    fputc('\n', s->out);
+    emitCalcSignature(s, def);
+    fputs(" {\n", s->out);
+    /* Intermediate attributes become local C variables.  Source order
+     * matters — a later attribute may reference an earlier one. */
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_ATTRIBUTE) continue;
+        const char* lty = cTypeOfAttributeFieldOrInferred(m);
+        fprintf(s->out, "    %s %.*s = ", lty,
+                m->as.attribute.name.length, m->as.attribute.name.start);
+        emitExpr(s, m->as.attribute.defaultValue);
+        fputs(";\n", s->out);
+    }
+    /* Single return statement. */
+    for (int i = 0; i < def->as.scope.memberCount; i++) {
+        const Node* m = def->as.scope.members[i];
+        if (!m || m->kind != NODE_RETURN) continue;
+        fputs("    return ", s->out);
+        emitExpr(s, m->as.ret.defaultValue);
+        fputs(";\n", s->out);
+        break;
+    }
+    fputs("}\n", s->out);
+}
+
+/* Walk the program collecting every emittable calc def into the
+ * registry.  No fixed-point needed — calcs depend only on primitive
+ * types and other calcs (which are forward-declared together).      */
+static void onCollectCalc(AstWalkCtx* ctx, Node* n) {
+    CCtx* s = ctx->userData;
+    if (isCalcRegistered(s, n)) return;
+    if (calcDefEmittable(n)) registerCalc(s, n);
+}
+
+static void collectCalcDefs(CCtx* s, Node* program) {
+    static const AstVisitor v = { .onDefinitionEnter = onCollectCalc };
+    astWalkProgram(program, &v, s);
+}
+
+/* True iff an expression contains any function-call subnode.  Used to
+ * gate top-level `static const` emission: C doesn't allow function
+ * calls in const initializers, so we skip with a comment until v0.23
+ * lifts these into a runtime `__sml2c_init`.                         */
+static bool exprContainsCall(const Node* e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case NODE_CALL:    return true;
+    case NODE_BINARY:  return exprContainsCall(e->as.binary.left)
+                           || exprContainsCall(e->as.binary.right);
+    case NODE_UNARY:   return exprContainsCall(e->as.unary.operand);
+    default:           return false;
     }
 }
 
@@ -390,12 +609,14 @@ static void onPackageEnter(AstWalkCtx* ctx, Node* n) {
 static void onDefinitionEnter(AstWalkCtx* ctx, Node* n) {
     CCtx* s = ctx->userData;
     s->insideAnyDef = true;
-    if (!isEmittable(s, n)) {
-        fprintf(s->out, "/* skipped: %.*s (not C-emittable) */\n",
-                n->as.scope.name.length, n->as.scope.name.start);
+    if (isEmittable(s, n) || isCalcRegistered(s, n)) {
+        /* Already emitted in an earlier pass — struct registry or
+         * calc-def registry.  Don't re-emit and don't print a skip
+         * comment. */
+        return;
     }
-    /* Emittable defs were already emitted by the registry-driven
-     * pass; do not re-emit here.                                  */
+    fprintf(s->out, "/* skipped: %.*s (not C-emittable) */\n",
+            n->as.scope.name.length, n->as.scope.name.start);
 }
 
 static void onDefinitionLeave(AstWalkCtx* ctx, Node* n) {
@@ -442,6 +663,18 @@ static void onAttribute(AstWalkCtx* ctx, Node* n) {
                 n->as.attribute.name.length, n->as.attribute.name.start);
         return;
     }
+    /* C requires `static const` initializers to be constant
+     * expressions.  Function calls aren't, so a default like
+     * `Power(400, 6000)` can't lower to a static const.  v0.23 will
+     * lift these into a runtime `__sml2c_init` function; for v0.22
+     * we skip cleanly so cc -fsyntax-only still passes. */
+    if (n->as.attribute.defaultValue
+     && exprContainsCall(n->as.attribute.defaultValue)) {
+        fprintf(s->out,
+                "/* skipped: %.*s (non-const initializer — needs v0.23 init function) */\n",
+                n->as.attribute.name.length, n->as.attribute.name.start);
+        return;
+    }
 
     fprintf(s->out, "static const %s %.*s",
             cty, n->as.attribute.name.length, n->as.attribute.name.start);
@@ -459,6 +692,7 @@ void emitC(FILE* out, const Node* program) {
         .out          = out,
         .insideAnyDef = false,
         .emittable    = { NULL, 0, 0 },
+        .calcs        = { NULL, 0, 0 },
     };
     /* `astWalkProgram` is non-const on its first arg, but we never
      * mutate during emission.  Cast away const for both passes.    */
@@ -472,6 +706,12 @@ void emitC(FILE* out, const Node* program) {
      * are already in the list before it.                            */
     collectEmittable(&s, prog);
 
+    /* Pass 1.5 — register every emittable calc def.  Calcs depend
+     * only on primitive types and (transitively) on other calcs,
+     * which are forward-declared together below; no fixed-point
+     * iteration needed.                                              */
+    collectCalcDefs(&s, prog);
+
     /* Header preamble — emitted directly so the registry pass can
      * follow it without going through onProgramEnter twice.        */
     fputs("/* Generated by sml2c — do not edit by hand. */\n", out);
@@ -483,11 +723,29 @@ void emitC(FILE* out, const Node* program) {
     static const AstVisitor banner = { .onPackageEnter = onPackageBanner };
     astWalkProgram(prog, &banner, &s);
 
-    /* Pass 2 — emit each emittable definition in registry order
-     * (which is dependency order).  Each emission is self-contained
-     * because all referenced types have already been emitted.      */
+    /* Pass 2a — calc def prototypes (forward declarations).  Comes
+     * before struct emission so a struct field whose type is named
+     * after a calc def doesn't shadow the function name at file
+     * scope (a remote possibility in pathological models, but cheap
+     * to defuse).                                                    */
+    if (s.calcs.count > 0) fputc('\n', out);
+    for (int i = 0; i < s.calcs.count; i++) {
+        emitCalcDefPrototype(&s, s.calcs.items[i]);
+    }
+
+    /* Pass 2b — emit each emittable struct definition in registry
+     * order (which is dependency order).  Each emission is
+     * self-contained because all referenced types have already been
+     * emitted.                                                       */
     for (int i = 0; i < s.emittable.count; i++) {
         emitDefinitionFromRegistry(&s, s.emittable.items[i]);
+    }
+
+    /* Pass 2c — calc def bodies.  After the structs because a calc
+     * def could (in a future revision) take or return a struct type
+     * by value, and the typedef must precede such a body.            */
+    for (int i = 0; i < s.calcs.count; i++) {
+        emitCalcDefBody(&s, s.calcs.items[i]);
     }
 
     /* Pass 3 — visitor walk for the bits the registry doesn't
@@ -503,4 +761,5 @@ void emitC(FILE* out, const Node* program) {
     astWalkProgram(prog, &v, &s);
 
     free(s.emittable.items);
+    free(s.calcs.items);
 }

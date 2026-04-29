@@ -6,6 +6,8 @@
 #   make test        parse every .sysml in test/ and print the AST
 #   make test-all    strict pass/fail run, including test/bad/ negatives
 #   make test-c      cc -fsyntax-only on each --emit-c output
+#   make test-c-run  compile each --emit-c output + companion .driver.c,
+#                    run it, diff stdout against test/expected/*.expect
 #   make test-graphsml  Python adapter smoke run on each --emit-json output
 #   make test-ptc    PTC reference-file gates (parser-strict + baseline)
 #   make sweep       all of the above + verify-tokens.sh, single report
@@ -198,6 +200,43 @@ test-c: $(BIN)
 	echo "  C codegen: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ]
 
+# ---- emitted-C runtime gate -----------------------------------------
+#
+# `test-c` proves the emitted C is *syntactically* valid (cc -fsyntax-
+# only).  `test-c-run` goes further: for any test/<name>.sysml that has
+# a companion test/<name>.driver.c (a hand-written main exercising the
+# generated API) and a test/expected/<name>.expect (golden stdout), it
+# compiles+links+runs and diffs.
+#
+# Walks every test/*.driver.c.  Failure diffs are printed inline.  A
+# missing .expect file fails the gate (force authors to commit one).
+
+.PHONY: test-c-run
+test-c-run: $(BIN)
+	@pass=0; fail=0; \
+	for drv in $(wildcard test/*.driver.c); do \
+	    base=$$(basename $$drv .driver.c); \
+	    src="test/$$base.sysml"; \
+	    exp="test/expected/$$base.expect"; \
+	    if [ ! -f "$$src" ]; then \
+	        echo "  FAIL  $$base (missing $$src)"; fail=$$((fail+1)); continue; fi; \
+	    if [ ! -f "$$exp" ]; then \
+	        echo "  FAIL  $$base (missing $$exp)"; fail=$$((fail+1)); continue; fi; \
+	    ./$(BIN) --emit-c "$$src" > /tmp/sml2c-$$base.c 2>/dev/null; \
+	    if ! $(CC) -std=c11 -o /tmp/sml2c-$$base /tmp/sml2c-$$base.c "$$drv" 2>/tmp/sml2c-$$base.cc.log; then \
+	        echo "  FAIL  $$base (compile failed)"; \
+	        sed 's/^/        /' /tmp/sml2c-$$base.cc.log; \
+	        fail=$$((fail+1)); continue; fi; \
+	    /tmp/sml2c-$$base > /tmp/sml2c-$$base.out 2>&1; \
+	    if ! diff -u "$$exp" /tmp/sml2c-$$base.out > /tmp/sml2c-$$base.diff 2>&1; then \
+	        echo "  FAIL  $$base (output mismatch)"; \
+	        sed 's/^/        /' /tmp/sml2c-$$base.diff; \
+	        fail=$$((fail+1)); continue; fi; \
+	    pass=$$((pass+1)); \
+	done; \
+	echo "  C runtime: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
+
 # ---- PTC reference-file gate ----------------------------------------
 #
 # PTC is a 1580-line industry-standard SysML file from the SysML
@@ -252,6 +291,8 @@ sweep: $(BIN)
 	$(MAKE) -s test-all        || status=1; \
 	echo "==> test-c (cc -fsyntax-only)"; \
 	$(MAKE) -s test-c          || status=1; \
+	echo "==> test-c-run (cc + ./binary + diff)"; \
+	$(MAKE) -s test-c-run      || status=1; \
 	echo "==> test-graphsml"; \
 	$(MAKE) -s test-graphsml   || status=1; \
 	echo "==> test-ptc"; \
